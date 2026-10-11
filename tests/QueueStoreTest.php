@@ -24,6 +24,7 @@ final class QueueStoreTest extends RedisTestCase
         $this->store->push('high', 'App\\ResetPassword', ['userId' => 9], $now, $now);
 
         self::assertSame([2, 1, 0], [$this->store->size('default'), $this->store->size('high'), $this->store->size('other')]);
+        self::assertEqualsCanonicalizing(['default', 'high'], $this->store->queues());
 
         $taken = [];
         while (($message = $this->store->reserve(['high', 'default'], $now, 90)) !== null) {
@@ -51,6 +52,13 @@ final class QueueStoreTest extends RedisTestCase
         self::assertSame(['oldest' => $now, 'pending' => 1, 'delayed' => 1, 'processing' => 0], $this->store->counts('default', $now + 5));
         $first = $this->store->reserve(['default'], $now, 90);
         self::assertSame(['oldest' => null, 'pending' => 0, 'delayed' => 1, 'processing' => 1], $this->store->counts('default', $now));
+        // The same, job by job, to be looked at: nothing is taken by looking.
+        $listed = fn (string $state, int $at): array => array_map(static fn ($message): array => [$message->job, $message->availableAt, $message->reservedAt], $this->store->jobs('default', $state, $at));
+        self::assertSame([['App\\Now', $now, $now]], $listed('processing', $now));
+        self::assertSame([['App\\Remind', $now + 600, null]], $listed('delayed', $now));
+        self::assertSame([], $listed('pending', $now));
+        self::assertSame([['App\\Remind', $now + 600, null]], $listed('pending', $now + 700));
+        self::assertSame([], $listed('delayed', $now + 700));
         // Its time come, the delayed one is pending since then, though no worker has asked yet.
         self::assertSame(['oldest' => $now + 600, 'pending' => 1, 'delayed' => 0, 'processing' => 1], $this->store->counts('default', $now + 700));
         $this->store->complete($first);

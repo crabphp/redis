@@ -240,6 +240,76 @@ final readonly class QueueStore implements Store
             + (int) $this->redis->command('ZCARD', $this->prefix . 'reserved:' . $queue);
     }
 
+    public function queues(): array
+    {
+        // By the keys there are: a queue with nothing in it has none. Failed jobs name theirs themselves.
+        $names = [];
+        $cursor = '0';
+        do {
+            [$cursor, $keys] = $this->redis->command('SCAN', $cursor, 'MATCH', addcslashes($this->prefix, '*?[]\\') . '*:*', 'COUNT', 500);
+            foreach ($keys as $key) {
+                if (preg_match('/^(?:ready|delayed|reserved):(.+)$/', substr((string) $key, strlen($this->prefix)), $match) === 1) {
+                    $names[$match[1]] = true;
+                }
+            }
+        } while ((string) $cursor !== '0');
+        foreach ($this->failed(200) as $message) {
+            $names[$message->queue] = true;
+        }
+        return array_map(strval(...), array_keys($names));
+    }
+
+    public function jobs(string $queue, string $state, int $now, int $limit = 50): array
+    {
+        $limit = max(0, $limit);
+        if ($limit === 0) {
+            return [];
+        }
+        // Each id with the time that matters in its state: when it was taken, or from when it may run.
+        $found = [];
+        if ($state === 'processing') {
+            $found = self::pairs((array) $this->redis->command('ZRANGE', $this->prefix . 'reserved:' . $queue, 0, $limit - 1, 'WITHSCORES'));
+        } elseif ($state === 'delayed') {
+            $found = self::pairs((array) $this->redis->command('ZRANGEBYSCORE', $this->prefix . 'delayed:' . $queue, '(' . $now, '+inf', 'WITHSCORES', 'LIMIT', 0, $limit));
+        } elseif ($state === 'pending') {
+            // Those whose time has come and that no worker has asked for since, then the ready list, as a worker would find them.
+            $found = self::pairs((array) $this->redis->command('ZRANGEBYSCORE', $this->prefix . 'delayed:' . $queue, '-inf', $now, 'WITHSCORES', 'LIMIT', 0, $limit));
+            foreach ((array) $this->redis->command('LRANGE', $this->prefix . 'ready:' . $queue, 0, $limit - 1) as $id) {
+                $found[] = [(string) $id, null];
+            }
+            $found = array_slice($found, 0, $limit);
+        } else {
+            throw new \InvalidArgumentException("\"{$state}\" is not a state a waiting job is in: pending, delayed or processing.");
+        }
+        $jobs = [];
+        foreach ($found as [$id, $time]) {
+            $fields = $this->redis->command('HMGET', $this->prefix . 'job:' . $id, 'job', 'data', 'attempts', 'at');
+            if (!is_array($fields) || $fields[0] === null) {
+                continue;
+            }
+            [$job, $data, $attempts, $at] = $fields;
+            $jobs[] = new Message(
+                $id, $queue, $job, json_decode((string) $data, true, flags: JSON_THROW_ON_ERROR), (int) $attempts,
+                availableAt: $state === 'processing' ? ($at === null ? null : (int) $at) : ($time ?? ($at === null ? null : (int) $at)),
+                reservedAt: $state === 'processing' ? $time : null,
+            );
+        }
+        return $jobs;
+    }
+
+    /**
+     * @param list<mixed> $flat Members and their scores, one after the other, as Redis gives them.
+     * @return list<array{string, int}>
+     */
+    private static function pairs(array $flat): array
+    {
+        $pairs = [];
+        for ($index = 0; $index + 1 < count($flat); $index += 2) {
+            $pairs[] = [(string) $flat[$index], (int) $flat[$index + 1]];
+        }
+        return $pairs;
+    }
+
     public function counts(string $queue, int $now): array
     {
         // A delayed job whose time has come is moved to the ready list only when a worker next
