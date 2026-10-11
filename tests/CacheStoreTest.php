@@ -5,11 +5,92 @@ declare(strict_types=1);
 namespace Crab\Redis\Tests;
 
 use Crab\Cache\Cache;
+use Crab\Contracts\Cache\Lock;
 use Crab\Redis\CacheStore;
 use Crab\Testing\FrozenClock;
 
 final class CacheStoreTest extends RedisTestCase
 {
+    public function testALockCanBeTakenByOneHolderAndTakenAgainAfterRelease(): void
+    {
+        $clock = new FrozenClock('2026-01-31 12:00:00');
+        $cache = new Cache(new CacheStore($this->redis, $this->prefix), clock: $clock);
+
+        $lock = $cache->lock('report', 60);
+        self::assertInstanceOf(Lock::class, $lock);
+        self::assertNull($cache->lock('report', 60));
+        self::assertTrue($lock->release());
+        $next = $cache->lock('report', 60);
+        self::assertInstanceOf(Lock::class, $next);
+        self::assertTrue($next->release());
+    }
+
+    public function testAnExpiredHolderCannotReleaseTheLockTakenInItsPlace(): void
+    {
+        $clock = new FrozenClock('2026-01-31 12:00:00');
+        $cache = new Cache(new CacheStore($this->redis, $this->prefix), clock: $clock);
+        $first = $cache->lock('report', 10);
+        self::assertInstanceOf(Lock::class, $first);
+
+        $clock->advance('+11 seconds');
+        $second = $cache->lock('report', 10);
+        self::assertInstanceOf(Lock::class, $second);
+        self::assertFalse($first->release());
+        self::assertNull($cache->lock('report', 10));
+        self::assertTrue($second->release());
+    }
+
+    public function testALockCanBeReleasedOnlyOnce(): void
+    {
+        $clock = new FrozenClock('2026-01-31 12:00:00');
+        $cache = new Cache(new CacheStore($this->redis, $this->prefix), clock: $clock);
+        $lock = $cache->lock('report', 60);
+        self::assertInstanceOf(Lock::class, $lock);
+
+        self::assertTrue($lock->release());
+        self::assertFalse($lock->release());
+    }
+
+    public function testAnEntryIsDeletedOnlyWhenItIsLiveAndItsValueMatchesExactly(): void
+    {
+        $clock = new FrozenClock('2026-01-31 12:00:00');
+        $store = new CacheStore($this->redis, $this->prefix);
+        $cache = new Cache($store, clock: $clock);
+        $cache->set('owned', "token:\0\n", 10);
+        $cache->set('expired', 'old', 1);
+        $cache->set('forever', 'kept');
+        $now = $clock->now()->getTimestamp();
+
+        self::assertFalse($store->deleteIf('missing', serialize('token'), $now));
+        self::assertFalse($store->deleteIf('owned', serialize("Token:\0\n"), $now));
+        self::assertSame("token:\0\n", $cache->get('owned'));
+        $clock->advance('+1 second');
+        $now = $clock->now()->getTimestamp();
+        self::assertFalse($store->deleteIf('expired', serialize('old'), $now));
+        self::assertNull($cache->get('expired'));
+        self::assertTrue($store->deleteIf('owned', serialize("token:\0\n"), $now));
+        self::assertNull($cache->get('owned'));
+        self::assertFalse($store->deleteIf('owned', serialize("token:\0\n"), $now));
+        self::assertTrue($store->deleteIf('forever', serialize('kept'), $now));
+        self::assertNull($cache->get('forever'));
+        $store->set('empty', '', null);
+        self::assertTrue($store->deleteIf('empty', '', $now));
+    }
+
+    public function testRedisNeedsNoPruningBecauseItDropsEntriesItself(): void
+    {
+        $clock = new FrozenClock('2026-01-31 12:00:00');
+        $store = new CacheStore($this->redis, $this->prefix);
+        $cache = new Cache($store, clock: $clock);
+        $cache->set('expired', 'old', 10);
+        $cache->set('live', 'new', 100);
+        $cache->set('forever', 'kept');
+        $clock->advance('+11 seconds');
+
+        self::assertSame(0, $store->prune($clock->now()->getTimestamp()));
+        self::assertSame([null, 'new', 'kept'], array_values($cache->getMultiple(['expired', 'live', 'forever'])));
+    }
+
     public function testAnEntryIsKeptUntilItsTimeByTheCallersClock(): void
     {
         $store = new CacheStore($this->redis, $this->prefix);

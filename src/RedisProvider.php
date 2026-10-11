@@ -17,6 +17,7 @@ use Crab\Contracts\Queue\Store as QueueStoreContract;
  *     url      where the server is; "redis://127.0.0.1:6379" unless set
  *     prefix   put before every key, to keep two applications apart on one server; "crab:"
  *     timeout  seconds to wait for a connection before a command fails; 2
+ *     reply_timeout  seconds to wait for a command's reply, besides any blocking timeout; 5
  *     tls      PHP's "ssl" context options for a "rediss://" address, such as "cafile"; none unless set
  *
  * With "cache.store" set to "redis" the cache's entries are kept there,
@@ -35,12 +36,14 @@ final class RedisProvider implements Provider
             'url' => 'redis://127.0.0.1:6379',
             'prefix' => 'crab:',
             'timeout' => 2.0,
+            'reply_timeout' => 5.0,
             'tls' => [],
         ]);
         $container->singleton(Client::class, static fn (Container $container): Client => new EngineClient(
             (string) $container->get(Config::class)->get('redis.url'),
             (float) $container->get(Config::class)->get('redis.timeout'),
             (array) $container->get(Config::class)->get('redis.tls'),
+            replyTimeout: (float) $container->get(Config::class)->get('redis.reply_timeout'),
         ));
         if ($config->get('cache.store') === 'redis') {
             $container->singleton(CacheStoreContract::class, static fn (Container $container): CacheStore => new CacheStore(

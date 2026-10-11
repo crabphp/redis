@@ -43,6 +43,7 @@ Nothing else changes. `Cache`, `Queue`, `queue:work`, supervisors, retries and `
 return [
     'url' => env('REDIS_URL', 'redis://127.0.0.1:6379'),
     'prefix' => 'shop:',
+    'reply_timeout' => 5.0,
 ];
 ```
 
@@ -51,9 +52,12 @@ return [
 | `redis.url` | `redis://127.0.0.1:6379` | Where the server is. `redis://user:secret@host:6379/1` names who asks and which database; `?password=secret&database=1` does the same. `rediss://` for an encrypted connection |
 | `redis.prefix` | `crab:` | Put before every key, to keep two applications apart on one server |
 | `redis.timeout` | `2.0` | Seconds to wait for a connection before a command fails |
+| `redis.reply_timeout` | `5.0` | Positive seconds to wait for a reply after writing a command, in addition to its explicit blocking timeout |
 | `redis.tls` | none | PHP's `ssl` context options for a `rediss://` address, such as `['cafile' => '/etc/ssl/redis-ca.pem']` |
 
 The cache's keys start with the prefix and `cache:`, the queue's with the prefix and `queue:`. `cache:clear` removes the cache's keys and nothing else on the server.
+
+Set `reply_timeout` when a stalled Redis connection should fail sooner, or when your commands need longer to answer. With no provider, pass it as `new EngineClient($url, replyTimeout: 0.5)`.
 
 ## Using Redis yourself
 
@@ -85,7 +89,8 @@ A reply is as Redis gives it: a string, an integer, null, or a list of those. A 
 - **Jobs run at least once,** as on every store. A job a worker took and never reported on is given out again after `queue.retry_after` seconds.
 - **Outside a worker,** in a command such as `cache:clear`, each Redis command opens a connection and closes it. Inside a worker one connection is kept.
 - **A command that waits, such as `BLPOP`, holds the worker's connection** until it returns, and the worker's other commands wait behind it. The stores use none. For one of your own, make a second `EngineClient` for it.
-- **A reply has no time limit.** `redis.timeout` is for connecting. A server that accepts a command and never answers keeps its caller waiting.
+- **A reply has a deadline.** A server that accepts a command and never answers fails it after `redis.reply_timeout` with `RedisException` naming the command. Every command waiting on that connection fails with the same reason; the next command connects again. This applies outside workers too.
+- **Explicit blocking time is added to the reply deadline.** `BLPOP`, `BRPOP`, `BRPOPLPUSH`, `BLMOVE`, `BZPOPMIN` and `BZPOPMAX` give seconds as their last argument; `XREAD` and `XREADGROUP` give milliseconds with `BLOCK`. A block of `0` waits indefinitely. Other commands use the ordinary reply timeout.
 - **The cache's clock is yours.** An entry carries the time it expires, and the application's clock decides. Redis drops it a minute later on its own.
 
 ## How it is built
@@ -93,6 +98,7 @@ A reply is as Redis gives it: a string, an integer, null, or a list of those. A 
 The client is Crab's own, `EngineClient`, written on the engine's event loop and name resolver. The package needs nothing but the framework.
 
 - **One connection per worker.** Every command of a worker goes down it one after another, without waiting for the reply before, and each reply wakes whoever sent its command. Fifty requests asking Redis at once are fifty commands on one connection.
+- **One reply timer per connection.** Each command's deadline starts when it is written. The timer watches the earliest deadline and moves to the next after a reply, so a pipeline does not need a timer for every command.
 - **A connection that fails is made again.** The commands waiting on it fail with `RedisException`, and the next command connects afresh.
 - **The stores know one interface,** `Crab\Redis\Client`, with one method, `command()`.
 

@@ -44,6 +44,22 @@ final readonly class CacheStore implements Store
         LUA;
 
     /**
+     * Deletes a live entry only when it holds the holder's exact token.
+     * KEYS: the entry. ARGV: the value to match, the time now.
+     */
+    private const DELETE_IF = <<<'LUA'
+        local current = redis.call('GET', KEYS[1])
+        if not current then
+            return 0
+        end
+        local at, value = string.match(current, '^([^:]+):(.*)$')
+        if value == ARGV[1] and (at == 'n' or tonumber(at) > tonumber(ARGV[2])) then
+            return redis.call('DEL', KEYS[1])
+        end
+        return 0
+        LUA;
+
+    /**
      * Adds to the whole number at an entry, which is kept as "i:5;". One
      * that is absent, expired or not such a number counts from zero.
      * KEYS: the entry. ARGV: how much to add, when a new count expires
@@ -130,6 +146,19 @@ final readonly class CacheStore implements Store
     public function delete(string $key): void
     {
         $this->redis->command('DEL', $this->prefix . $key);
+    }
+
+    public function deleteIf(string $key, string $value, int $now): bool
+    {
+        return $this->redis->command('EVAL', self::DELETE_IF, 1, $this->prefix . $key, $value, $now) === 1;
+    }
+
+    /**
+     * Redis drops expired entries itself, so there is nothing to prune.
+     */
+    public function prune(int $now): int
+    {
+        return 0;
     }
 
     public function clear(): void

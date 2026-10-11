@@ -54,9 +54,19 @@ final class EngineClient implements Client
     private ?string $reader = null;
     private ?string $writer = null;
     /**
-     * Who waits for a reply, in the order the commands were sent, each with its command's name.
+     * Byte positions on this connection let each reply deadline start
+     * when its whole command has been written, even under backpressure.
+     */
+    private int $queued = 0;
+    private int $written = 0;
+    private ?string $replyTimer = null;
+    private ?float $replyDeadline = null;
+    /**
+     * Who waits for a reply, in wire order. A null timeout means an
+     * indefinite blocking command; a null deadline means it is not yet
+     * fully written, or has no deadline.
      *
-     * @var list<array{Suspension, string}>
+     * @var list<array{suspension: Suspension, name: string, timeout: ?float, deadline: ?float, end: int}>
      */
     private array $waiting = [];
     /**
@@ -70,9 +80,13 @@ final class EngineClient implements Client
      * @param string $url Where the server is: "redis://127.0.0.1:6379", with "?password=..." and "&database=1" when needed, or "rediss://" for an encrypted connection.
      * @param float $timeout Seconds to wait for a connection before the command fails.
      * @param array<string, mixed> $tls PHP's "ssl" context options for an encrypted connection, such as "cafile".
+     * @param float $replyTimeout Seconds to wait for a reply after writing a command, in addition to any explicit blocking timeout.
      */
-    public function __construct(string $url, private readonly float $timeout = 2.0, private readonly array $tls = [])
+    public function __construct(string $url, private readonly float $timeout = 2.0, private readonly array $tls = [], private readonly float $replyTimeout = 5.0)
     {
+        if ($replyTimeout <= 0 || !is_finite($replyTimeout)) {
+            throw new \InvalidArgumentException('Redis reply timeout must be greater than zero seconds. Set replyTimeout to a positive, finite number.');
+        }
         $parts = parse_url($url);
         $scheme = is_array($parts) ? ($parts['scheme'] ?? '') : '';
         if (!is_array($parts) || !in_array($scheme, ['redis', 'rediss'], true) || !isset($parts['host'])) {
@@ -134,8 +148,16 @@ final class EngineClient implements Client
             throw new RedisException("Redis command {$words[0]} failed: the connection was lost.");
         }
         $suspension = $loop->getSuspension();
-        $this->waiting[] = [$suspension, (string) $words[0]];
-        $this->unsent .= Resp::command($words);
+        $bytes = Resp::command($words);
+        $this->queued += strlen($bytes);
+        $this->waiting[] = [
+            'suspension' => $suspension,
+            'name' => strtoupper((string) $words[0]),
+            'timeout' => $this->replyWait($words),
+            'deadline' => null,
+            'end' => $this->queued,
+        ];
+        $this->unsent .= $bytes;
         // A reply is awaited, so the connection keeps the loop going until it comes.
         $loop->reference($this->reader);
         if (!$this->flush($loop)) {
@@ -146,6 +168,106 @@ final class EngineClient implements Client
             throw new RedisException("Redis command {$words[0]} failed: the connection was lost while sending.");
         }
         return $suspension->suspend();
+    }
+
+    /**
+     * How long this command may wait for its reply; null for as long as
+     * it takes. Redis's blocking list and sorted-set commands end in
+     * their seconds, and XREAD and XREADGROUP give BLOCK in milliseconds
+     * before STREAMS. A command that blocks adds that time to the
+     * ordinary timeout, and one that blocks for zero has none.
+     *
+     * Only where the time stands and how it is written is checked, the
+     * way Redis reads it. The rest of the command is Redis's to refuse,
+     * which it does at once, so a mistake there never waits.
+     *
+     * @param list<string|int|float> $words
+     */
+    private function replyWait(array $words): ?float
+    {
+        $name = strtoupper((string) $words[0]);
+        $count = count($words);
+        $block = null;
+        if (in_array($name, ['BLPOP', 'BRPOP', 'BZPOPMIN', 'BZPOPMAX'], true)) {
+            $block = $count >= 3 ? self::seconds($words[$count - 1]) : null;
+        } elseif ($name === 'BRPOPLPUSH' || $name === 'BLMOVE') {
+            $block = $count === ($name === 'BLMOVE' ? 6 : 4) ? self::seconds($words[$count - 1]) : null;
+        } elseif ($name === 'XREAD' || $name === 'XREADGROUP') {
+            // Options come in any order before STREAMS, and the last BLOCK counts. What follows
+            // an option is stepped over, so a group, a consumer or a count is never read as one.
+            $follows = ['GROUP' => 2, 'COUNT' => 1, 'CLAIM' => 1, 'BLOCK' => 1];
+            for ($index = 1; $index < $count; ++$index) {
+                $option = strtoupper((string) $words[$index]);
+                if ($option === 'STREAMS') {
+                    break;
+                }
+                if ($option === 'BLOCK') {
+                    $word = (string) ($words[$index + 1] ?? '');
+                    $block = preg_match('/^\d+$/', $word) === 1 ? (float) $word / 1000 : null;
+                }
+                $index += $follows[$option] ?? 0;
+            }
+        }
+        if ($block === null) {
+            return $this->replyTimeout;
+        }
+        return $block === 0.0 ? null : $block + $this->replyTimeout;
+    }
+
+    /**
+     * Seconds as Redis accepts them: a number that is not negative, with
+     * no space around it, which PHP would let through and Redis refuses.
+     */
+    private static function seconds(string|int|float $word): ?float
+    {
+        $word = (string) $word;
+        if ($word !== trim($word) || !is_numeric($word) || (float) $word < 0 || !is_finite((float) $word)) {
+            return null;
+        }
+        return abs((float) $word);
+    }
+
+    /**
+     * One timer watches the earliest reply deadline, normally the oldest
+     * command. Keeping a timer per pipelined command would add watchers
+     * without changing how a timeout drops the whole connection. A later
+     * command can expire first when an earlier one explicitly blocks.
+     * Deadlines stay tied to writing, never to the previous reply.
+     * The timer reads who still waits when it fires: equal deadlines may
+     * remain after the command that first owned the timer was answered.
+     */
+    private function watchReply(EventLoop $loop): void
+    {
+        $next = null;
+        foreach ($this->waiting as $waiting) {
+            if ($waiting['deadline'] !== null && ($next === null || $waiting['deadline'] < $next['deadline'])) {
+                $next = $waiting;
+            }
+        }
+        $deadline = $next['deadline'] ?? null;
+        if ($deadline === $this->replyDeadline) {
+            return;
+        }
+        if ($this->replyTimer !== null) {
+            $loop->cancel($this->replyTimer);
+            $this->replyTimer = null;
+        }
+        $this->replyDeadline = $deadline;
+        if ($next === null) {
+            return;
+        }
+        $left = max(0.0, $deadline - hrtime(true) / 1_000_000_000);
+        $this->replyTimer = $loop->delay($left, function (string $timer): void {
+            if ($this->replyTimer !== $timer) {
+                return;
+            }
+            foreach ($this->waiting as $waiting) {
+                if ($waiting['deadline'] === $this->replyDeadline) {
+                    $this->fail(new RedisException("Redis did not answer {$waiting['name']} within {$waiting['timeout']} seconds"));
+                    return;
+                }
+            }
+        });
     }
 
     /**
@@ -310,6 +432,17 @@ final class EngineClient implements Client
                 break;
             }
             $this->unsent = substr($this->unsent, $sent);
+            $this->written += $sent;
+            $now = hrtime(true) / 1_000_000_000;
+            foreach ($this->waiting as &$waiting) {
+                if ($waiting['end'] > $this->written) {
+                    break;
+                }
+                if ($waiting['deadline'] === null && $waiting['timeout'] !== null) {
+                    $waiting['deadline'] = $now + $waiting['timeout'];
+                }
+            }
+            unset($waiting);
         }
         if ($this->unsent === '' && $this->writer !== null) {
             $loop->cancel($this->writer);
@@ -321,6 +454,7 @@ final class EngineClient implements Client
                 }
             });
         }
+        $this->watchReply($loop);
         return true;
     }
 
@@ -343,7 +477,9 @@ final class EngineClient implements Client
                 if (!$complete) {
                     break;
                 }
-                [$suspension, $name] = array_shift($this->waiting);
+                $waiting = array_shift($this->waiting);
+                $suspension = $waiting['suspension'];
+                $name = $waiting['name'];
                 if ($reply instanceof RedisError) {
                     $suspension->throw(new RedisException("Redis refused {$name}: {$reply->message}"));
                 } else {
@@ -355,6 +491,7 @@ final class EngineClient implements Client
             return;
         }
         $this->received = substr($this->received, $offset);
+        $this->watchReply($loop);
         if ($this->waiting === []) {
             $loop->unreference($this->reader);
         }
@@ -363,12 +500,13 @@ final class EngineClient implements Client
     /**
      * Drops the connection and fails every command that waits on it.
      */
-    private function fail(string $why): void
+    private function fail(string|RedisException $why): void
     {
         $waiting = $this->waiting;
         $this->drop();
-        foreach ($waiting as [$suspension, $name]) {
-            $suspension->throw(new RedisException("Redis command {$name} failed: {$why}."));
+        foreach ($waiting as $command) {
+            $error = $why instanceof RedisException ? $why : new RedisException("Redis command {$command['name']} failed: {$why}.");
+            $command['suspension']->throw($error);
         }
     }
 
@@ -378,7 +516,7 @@ final class EngineClient implements Client
     private function drop(): void
     {
         // The watchers belong to the loop they were made on, which may no longer be the current one.
-        foreach ([$this->reader, $this->writer] as $watcher) {
+        foreach ([$this->reader, $this->writer, $this->replyTimer] as $watcher) {
             if ($watcher !== null) {
                 $this->loop?->cancel($watcher);
             }
@@ -386,7 +524,9 @@ final class EngineClient implements Client
         if (is_resource($this->stream)) {
             fclose($this->stream);
         }
-        $this->stream = $this->reader = $this->writer = $this->loop = null;
+        $this->stream = $this->reader = $this->writer = $this->replyTimer = $this->loop = null;
+        $this->replyDeadline = null;
+        $this->queued = $this->written = 0;
         $this->received = $this->unsent = '';
         $this->waiting = [];
     }

@@ -105,6 +105,33 @@ final class RedisProviderTest extends RedisTestCase
         self::assertSame('redis://127.0.0.1:6379', (new Config())->get('redis.url', 'redis://127.0.0.1:6379'));
     }
 
+    public function testTheReplyTimeoutDefaultsToFiveSeconds(): void
+    {
+        $app = $this->app([]);
+        $redis = $app->container->get(Client::class);
+
+        self::assertSame(5.0, $app->config->get('redis.reply_timeout'));
+        self::assertSame(5.0, (new \ReflectionProperty($redis, 'replyTimeout'))->getValue($redis));
+    }
+
+    public function testTheProviderPassesTheConfiguredReplyTimeoutToTheClient(): void
+    {
+        $app = $this->app(['redis' => ['url' => $this->url, 'reply_timeout' => 0.35]]);
+        $redis = $app->container->get(Client::class);
+
+        self::assertSame(0.35, $app->config->get('redis.reply_timeout'));
+        self::assertSame(0.35, (new \ReflectionProperty($redis, 'replyTimeout'))->getValue($redis));
+    }
+
+    public function testAConfiguredReplyTimeoutOfZeroIsRefused(): void
+    {
+        $app = $this->app(['redis' => ['url' => $this->url, 'reply_timeout' => 0]]);
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('Set replyTimeout to a positive, finite number');
+        $app->container->get(Client::class);
+    }
+
     public function testAServerThatIsNotThereAndACommandItRefusesAreReported(): void
     {
         try {
