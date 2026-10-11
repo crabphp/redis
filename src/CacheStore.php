@@ -44,6 +44,34 @@ final readonly class CacheStore implements Store
         LUA;
 
     /**
+     * Adds to the whole number at an entry, which is kept as "i:5;". One
+     * that is absent, expired or not such a number counts from zero.
+     * KEYS: the entry. ARGV: how much to add, when a new count expires
+     * ("n" for never), when Redis drops a new count (0 for never), the time now.
+     */
+    private const INCREMENT = <<<'LUA'
+        local current = redis.call('GET', KEYS[1])
+        local count = 0
+        local expires = nil
+        if current then
+            local at, number = string.match(current, '^([^:]+):i:(-?%d+);$')
+            if number and (at == 'n' or tonumber(at) > tonumber(ARGV[4])) then
+                count = tonumber(number)
+                expires = at
+            end
+        end
+        count = count + tonumber(ARGV[1])
+        if expires then
+            redis.call('SET', KEYS[1], expires .. ':i:' .. string.format('%d', count) .. ';', 'KEEPTTL')
+        elseif ARGV[3] == '0' then
+            redis.call('SET', KEYS[1], ARGV[2] .. ':i:' .. string.format('%d', count) .. ';')
+        else
+            redis.call('SET', KEYS[1], ARGV[2] .. ':i:' .. string.format('%d', count) .. ';', 'EXAT', ARGV[3])
+        end
+        return count
+        LUA;
+
+    /**
      * @param string $prefix Put before every key. clear() removes the keys that start with it and no others, so it may not be empty.
      */
     public function __construct(private Client $redis, private string $prefix = 'crab:cache:')
@@ -83,6 +111,20 @@ final readonly class CacheStore implements Store
             $expiresAt === null ? 0 : self::droppedAt($expiresAt),
             $now,
         ) === 1;
+    }
+
+    public function increment(string $key, int $by, ?int $expiresAt, int $now): int
+    {
+        return (int) $this->redis->command(
+            'EVAL',
+            self::INCREMENT,
+            1,
+            $this->prefix . $key,
+            $by,
+            $expiresAt ?? self::NEVER,
+            $expiresAt === null ? 0 : self::droppedAt($expiresAt),
+            $now,
+        );
     }
 
     public function delete(string $key): void

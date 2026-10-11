@@ -68,6 +68,32 @@ final class CacheStoreTest extends RedisTestCase
         new CacheStore($this->redis, '');
     }
 
+    public function testIncrementCountsAsOneStepAndKeepsTheTimeTheCountStartedWith(): void
+    {
+        $clock = new FrozenClock('2026-01-31 12:00:00');
+        $cache = new Cache(new CacheStore($this->redis, $this->prefix), clock: $clock);
+
+        self::assertSame(1, $cache->increment('hits', ttl: 60));
+        self::assertSame(2, $cache->increment('hits', ttl: 600));
+        self::assertSame(7, $cache->increment('hits', 5));
+        self::assertSame(4, $cache->increment('hits', -3));
+        self::assertSame(4, $cache->get('hits'));
+
+        $clock->advance('+60 seconds');
+        self::assertFalse($cache->has('hits'));
+        self::assertSame(1, $cache->increment('hits'));
+        // Counted for ever, and never dropped by Redis.
+        self::assertSame(-1, $this->redis->command('TTL', $this->prefix . 'hits'));
+
+        $cache->set('seen', 40, 30);
+        self::assertSame(41, $cache->increment('seen', ttl: 600));
+        $clock->advance('+30 seconds');
+        self::assertFalse($cache->has('seen'));
+        $cache->set('text', 'not a number');
+        self::assertSame(1, $cache->increment('text'));
+        self::assertSame(-2, $cache->increment('below', -2));
+    }
+
     public function testTheFrameworksCacheWorksOnIt(): void
     {
         $clock = new FrozenClock('2026-01-31 12:00:00');
