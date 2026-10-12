@@ -7,6 +7,9 @@ namespace Crab\Redis\Tests;
 use Crab\App;
 use Crab\Cache\CacheProvider;
 use Crab\Config\Config;
+use Crab\Container\Container;
+use Crab\Contracts\Config\Config as ConfigContract;
+use Crab\Contracts\Container\Container as ContainerContract;
 use Crab\Console\Output;
 use Crab\Contracts\Cache\Cache;
 use Crab\Contracts\Cache\Store as CacheStoreContract;
@@ -19,6 +22,10 @@ use Crab\Redis\Client;
 use Crab\Redis\QueueStore;
 use Crab\Redis\RedisException;
 use Crab\Redis\RedisProvider;
+use Crab\Redis\Subscription;
+use Crab\Engine\Process\Worker;
+use Crab\Engine\Async\Async;
+use Crab\Testing\WorkerHarness;
 
 final class Sent
 {
@@ -112,6 +119,73 @@ final class RedisProviderTest extends RedisTestCase
 
         self::assertSame(5.0, $app->config->get('redis.reply_timeout'));
         self::assertSame(5.0, (new \ReflectionProperty($redis, 'replyTimeout'))->getValue($redis));
+    }
+
+    public function testStoppingTheWorkerClosesItsSubscriptionsAndOrdinaryConnection(): void
+    {
+        $container = new Container();
+        $container->instance(ConfigContract::class, new Config(['redis' => ['url' => $this->url]]));
+        $subscription = null;
+        $redis = null;
+        WorkerHarness::run([new RedisProvider()], function (Worker $worker, ContainerContract $container) use (&$subscription, &$redis): void {
+            $redis = $container->get(Client::class);
+            $redis->command('PING');
+            $subscription = $redis->subscribe($this->prefix . 'worker');
+            self::assertSame(1, $redis->publish($this->prefix . 'worker', 'before stop'));
+        }, $container);
+
+        self::assertInstanceOf(Subscription::class, $subscription);
+        self::assertSame([], iterator_to_array($subscription));
+        self::assertNull((new \ReflectionProperty($redis, 'stream'))->getValue($redis));
+        self::assertSame(0, $this->redis->publish($this->prefix . 'worker', 'after stop'));
+    }
+
+    public function testProviderStopClosesAnOpeningTlsSocketWithoutAnotherLoopTurn(): void
+    {
+        $listener = stream_socket_server('tcp://127.0.0.1:0', $code, $reason);
+        self::assertIsResource($listener, (string) $reason);
+        stream_set_blocking($listener, false);
+        $address = stream_socket_get_name($listener, false);
+        $container = new Container();
+        $container->instance(ConfigContract::class, new Config(['redis' => ['url' => 'rediss://' . $address, 'timeout' => 10.0]]));
+        $socket = $peer = $worker = null;
+        try {
+            WorkerHarness::run([new RedisProvider()], static function (Worker $running, ContainerContract $container) use ($listener, $address, &$socket, &$peer, &$worker): void {
+                $worker = $running;
+                $accepted = $worker->loop->getSuspension();
+                $worker->loop->onReadable($listener, static function (string $watcher) use ($listener, $worker, $accepted, &$peer): void {
+                    $peer = stream_socket_accept($listener, 0);
+                    $worker->loop->cancel($watcher);
+                    $accepted->resume();
+                });
+                $redis = $container->get(Client::class);
+                $worker->spawn(static function () use ($redis): void {
+                    try {
+                        $redis->subscribe('opening');
+                    } catch (RedisException) {
+                        // The opener will observe shutdown if the loop runs again.
+                    }
+                });
+                $accepted->suspend();
+                Async::sleep($worker->loop, 0.01);
+                foreach (get_resources('stream') as $candidate) {
+                    if (@stream_socket_get_name($candidate, true) === $address) {
+                        $socket = $candidate;
+                    }
+                }
+                self::assertIsResource($socket);
+            }, $container);
+
+            // Provider stop runs after the loop stops; do not await the opener here.
+            self::assertFalse(is_resource($socket), 'Provider stop left its opening TLS socket alive.');
+            self::assertSame([], $worker->loop->getIdentifiers());
+        } finally {
+            $worker?->loop->run();
+            if (is_resource($peer)) {
+                fclose($peer);
+            }
+            fclose($listener);
+        }
     }
 
     public function testTheProviderPassesTheConfiguredReplyTimeoutToTheClient(): void

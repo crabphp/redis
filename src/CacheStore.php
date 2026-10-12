@@ -24,6 +24,23 @@ final readonly class CacheStore implements Store
     private const NEVER = 'n';
 
     /**
+     * Consumes an entry once, checking expiry by the caller's clock.
+     * KEYS: the entry. ARGV: the time now.
+     */
+    private const TAKE = <<<'LUA'
+        local current = redis.call('GET', KEYS[1])
+        if not current then
+            return false
+        end
+        redis.call('DEL', KEYS[1])
+        local at, value = string.match(current, '^([^:]+):(.*)$')
+        if at == 'n' or (tonumber(at) and tonumber(at) > tonumber(ARGV[1])) then
+            return value
+        end
+        return false
+        LUA;
+
+    /**
      * Sets an entry unless one is there that has not expired.
      * KEYS: the entry. ARGV: the stored value, when Redis drops it (0 for never), the time now.
      */
@@ -146,6 +163,12 @@ final readonly class CacheStore implements Store
     public function delete(string $key): void
     {
         $this->redis->command('DEL', $this->prefix . $key);
+    }
+
+    public function take(string $key, int $now): ?string
+    {
+        $value = $this->redis->command('EVAL', self::TAKE, 1, $this->prefix . $key, $now);
+        return is_string($value) ? $value : null;
     }
 
     public function deleteIf(string $key, string $value, int $now): bool

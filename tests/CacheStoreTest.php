@@ -11,6 +11,46 @@ use Crab\Testing\FrozenClock;
 
 final class CacheStoreTest extends RedisTestCase
 {
+    public function testTakingAnEntryReturnsItOnceAndChecksTheCallersExpiry(): void
+    {
+        $store = new CacheStore($this->redis, $this->prefix);
+        $store->set('live', "binary:\0\xff\n", 130);
+        $store->set('expired', 'old', 130);
+        $store->set('empty', '', null);
+        self::assertSame("binary:\0\xff\n", $store->take('live', 129));
+        self::assertNull($store->take('live', 129));
+        self::assertNull($store->take('expired', 130));
+        self::assertSame('', $store->take('empty', 1_000_000));
+        self::assertNull($store->take('empty', 100));
+        self::assertNull($store->get('expired', 100));
+        $cache = new Cache($store);
+        $cache->set('value', false);
+        self::assertFalse($cache->take('value', 'missing'));
+        self::assertSame('missing', $cache->take('value', 'missing'));
+    }
+
+    public function testTwoConcurrentRedisConsumersTakeExactlyOneValue(): void
+    {
+        $loop = \Crab\Engine\EventLoop::current();
+        $store = new CacheStore($this->redis, $this->prefix);
+        $store->set('once', 'winner', null);
+        $tasks = [];
+        for ($i = 0; $i < 2; ++$i) {
+            $tasks[] = \Crab\Engine\Async\Task::spawn($loop, function (): ?string {
+                $client = new \Crab\Redis\EngineClient($this->url, replyTimeout: 2);
+                try {
+                    return (new CacheStore($client, $this->prefix))->take('once', 100);
+                } finally {
+                    $client->close();
+                }
+            });
+        }
+        $values = array_map(static fn ($task): ?string => $task->await(), $tasks);
+        $loop->run();
+        self::assertSame(1, count(array_filter($values, static fn ($value): bool => $value === 'winner')));
+        self::assertSame(1, count(array_filter($values, static fn ($value): bool => $value === null)));
+    }
+
     public function testALockCanBeTakenByOneHolderAndTakenAgainAfterRelease(): void
     {
         $clock = new FrozenClock('2026-01-31 12:00:00');

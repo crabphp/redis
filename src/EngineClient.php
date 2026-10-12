@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Crab\Redis;
 
 use Crab\Engine\EventLoop;
+use Crab\Engine\Async\Cancellation;
+use Crab\Engine\Async\CancelledException;
 use Crab\Engine\Network\DnsResolver;
 use Crab\Engine\Suspension;
 
@@ -75,22 +77,53 @@ final class EngineClient implements Client
      * @var list<Suspension>|null
      */
     private ?array $connecting = null;
+    /**
+     * The identity and cancellation of the ordinary connection attempt.
+     * A cancelled opener must never clean up a newer caller's connection.
+     */
+    private ?Cancellation $opening = null;
+    /**
+     * Dedicated connections are kept until closed, so worker shutdown can
+     * release even a subscription whose caller has stopped iterating.
+     *
+     * @var array<int, Subscription>
+     */
+    private array $subscriptions = [];
 
     /**
      * @param string $url Where the server is: "redis://127.0.0.1:6379", with "?password=..." and "&database=1" when needed, or "rediss://" for an encrypted connection.
      * @param float $timeout Seconds to wait for a connection before the command fails.
      * @param array<string, mixed> $tls PHP's "ssl" context options for an encrypted connection, such as "cafile".
      * @param float $replyTimeout Seconds to wait for a reply after writing a command, in addition to any explicit blocking timeout.
+     * @param int $subscriptionBuffer Maximum undelivered messages per subscription; the oldest are dropped at the limit.
+     * @param float $subscriptionIdleInterval Idle seconds before checking a subscription with PING.
+     * @param float $subscriptionPingTimeout Seconds to wait for that PING, independent of ordinary reply deadlines.
      */
-    public function __construct(string $url, private readonly float $timeout = 2.0, private readonly array $tls = [], private readonly float $replyTimeout = 5.0)
+    public function __construct(
+        string $url,
+        private readonly float $timeout = 2.0,
+        private readonly array $tls = [],
+        private readonly float $replyTimeout = 5.0,
+        private readonly int $subscriptionBuffer = 10_000,
+        private readonly float $subscriptionIdleInterval = 30.0,
+        private readonly float $subscriptionPingTimeout = 5.0,
+    )
     {
         if ($replyTimeout <= 0 || !is_finite($replyTimeout)) {
             throw new \InvalidArgumentException('Redis reply timeout must be greater than zero seconds. Set replyTimeout to a positive, finite number.');
         }
+        if ($subscriptionBuffer < 1) {
+            throw new \InvalidArgumentException('Set subscriptionBuffer to at least one message.');
+        }
+        foreach (['subscriptionIdleInterval' => $subscriptionIdleInterval, 'subscriptionPingTimeout' => $subscriptionPingTimeout] as $name => $seconds) {
+            if ($seconds <= 0 || !is_finite($seconds)) {
+                throw new \InvalidArgumentException("Set {$name} to a positive, finite number of seconds.");
+            }
+        }
         $parts = parse_url($url);
         $scheme = is_array($parts) ? ($parts['scheme'] ?? '') : '';
         if (!is_array($parts) || !in_array($scheme, ['redis', 'rediss'], true) || !isset($parts['host'])) {
-            throw new \InvalidArgumentException("\"{$url}\" is not the address of a Redis server. Write it as redis://127.0.0.1:6379, or rediss:// for an encrypted connection.");
+            throw new \InvalidArgumentException('The Redis address is invalid. Write it as redis://127.0.0.1:6379, or rediss:// for an encrypted connection.');
         }
         parse_str($parts['query'] ?? '', $query);
         $this->encrypted = $scheme === 'rediss';
@@ -109,6 +142,70 @@ final class EngineClient implements Client
     private function resolver(): DnsResolver
     {
         return new DnsResolver(patience: max(0.1, $this->timeout / 2), rounds: 1, fallback: false);
+    }
+
+    public function publish(string $channel, string $payload): int
+    {
+        return $this->command('PUBLISH', $channel, $payload);
+    }
+
+    public function subscribe(string ...$channels): Subscription
+    {
+        $subscription = $this->subscription();
+        try {
+            $subscription->add(...$channels);
+        } catch (\Throwable $error) {
+            $subscription->close();
+            throw $error;
+        }
+        return $subscription;
+    }
+
+    public function subscription(): Subscription
+    {
+        $setup = [];
+        if ($this->password !== null) {
+            $setup[] = $this->username === null ? ['AUTH', $this->password] : ['AUTH', $this->username, $this->password];
+        }
+        if ($this->database !== 0) {
+            $setup[] = ['SELECT', $this->database];
+        }
+        $subscription = new Subscription(
+            function (EventLoop $loop, Cancellation $cancellation): mixed {
+                try {
+                    return $this->open($loop, $cancellation);
+                } catch (CancelledException $error) {
+                    throw $error;
+                } catch (\Throwable $error) {
+                    throw new RedisException("Redis at {$this->host}:{$this->port} could not be reached. Check the address, TLS settings and server availability.", previous: $error);
+                }
+            },
+            $setup,
+            $this->subscriptionBuffer,
+            $this->replyTimeout,
+            $this->subscriptionIdleInterval,
+            $this->subscriptionPingTimeout,
+            function (Subscription $subscription): void {
+                unset($this->subscriptions[spl_object_id($subscription)]);
+            },
+        );
+        $this->subscriptions[spl_object_id($subscription)] = $subscription;
+        return $subscription;
+    }
+
+    public function close(): void
+    {
+        foreach ($this->subscriptions as $subscription) {
+            $subscription->close();
+        }
+        $opening = $this->opening;
+        $others = $this->connecting ?? [];
+        $this->opening = $this->connecting = null;
+        $opening?->cancel();
+        $this->fail('the client was closed; send a new command to connect again');
+        foreach ($others as $other) {
+            $other->throw(new RedisException('The Redis connection attempt was closed. Send a new command to connect again.'));
+        }
     }
 
     public function command(string $name, string|int|float ...$arguments): mixed
@@ -286,11 +383,14 @@ final class EngineClient implements Client
             return;
         }
         $this->connecting = [];
+        $this->opening = $opening = new Cancellation();
         // Said before the connection exists: the worker's other commands, arriving while it
         // is made, must see that it is being made on their own loop and wait for it.
         $this->loop = $loop;
         try {
-            $this->stream = $this->open($loop);
+            $stream = $this->open($loop, $opening);
+            $opening->throwIfCancelled();
+            $this->stream = $stream;
             $this->reader = $loop->onReadable($this->stream, fn () => $this->read($loop));
             // Idle, the connection does not keep a process alive that has nothing else to do.
             $loop->unreference($this->reader);
@@ -300,18 +400,23 @@ final class EngineClient implements Client
             if ($this->database !== 0) {
                 $this->send($loop, ['SELECT', $this->database]);
             }
+            $opening->throwIfCancelled();
         } catch (\Throwable $error) {
-            $error = $error instanceof RedisException ? $error : new RedisException("Redis at {$this->host}:{$this->port} could not be reached: {$error->getMessage()}", previous: $error);
-            $others = $this->connecting ?? [];
-            $this->connecting = null;
-            $this->drop();
-            foreach ($others as $other) {
-                $other->throw($error);
+            $error = $opening->isCancelled()
+                ? new RedisException('The Redis connection attempt was closed. Send a new command to connect again.')
+                : ($error instanceof RedisException ? $error : new RedisException("Redis at {$this->host}:{$this->port} could not be reached: {$error->getMessage()}", previous: $error));
+            if ($this->opening === $opening) {
+                $others = $this->connecting ?? [];
+                $this->opening = $this->connecting = null;
+                $this->drop();
+                foreach ($others as $other) {
+                    $other->throw($error);
+                }
             }
             throw $error;
         }
         $others = $this->connecting ?? [];
-        $this->connecting = null;
+        $this->opening = $this->connecting = null;
         foreach ($others as $other) {
             $other->resume();
         }
@@ -323,11 +428,12 @@ final class EngineClient implements Client
      *
      * @return resource
      */
-    private function open(EventLoop $loop): mixed
+    private function open(EventLoop $loop, ?Cancellation $cancellation = null): mixed
     {
         $deadline = hrtime(true) / 1_000_000_000 + $this->timeout;
         $failure = null;
-        foreach ($this->resolver->resolve($loop, $this->host) as $address) {
+        foreach ($this->resolver->resolve($loop, $this->host, $cancellation) as $address) {
+            $cancellation?->throwIfCancelled();
             $target = str_contains($address, ':') ? "tcp://[{$address}]:{$this->port}" : "tcp://{$address}:{$this->port}";
             $options = ['socket' => ['tcp_nodelay' => true]];
             if ($this->encrypted) {
@@ -339,19 +445,34 @@ final class EngineClient implements Client
                 continue;
             }
             stream_set_blocking($stream, false);
+            // Cancellation owns the local socket until it is handed to the
+            // client. Provider stop cannot wait for this fiber's finally block.
+            $release = $cancellation?->subscribe(static function () use ($stream): void {
+                if (is_resource($stream)) {
+                    fclose($stream);
+                }
+            });
             try {
-                $this->await($loop, $stream, true, $deadline);
+                $this->await($loop, $stream, true, $deadline, $cancellation);
                 // Being writable also follows a refusal; only a connected socket knows its peer.
                 if (@stream_socket_get_name($stream, true) === false) {
                     throw new \RuntimeException('the connection was refused');
                 }
                 if ($this->encrypted) {
-                    $this->encrypt($loop, $stream, $deadline);
+                    $this->encrypt($loop, $stream, $deadline, $cancellation);
                 }
+                $cancellation?->throwIfCancelled();
                 return $stream;
             } catch (\Throwable $error) {
-                fclose($stream);
+                if (is_resource($stream)) {
+                    fclose($stream);
+                }
+                if ($error instanceof CancelledException) {
+                    throw $error;
+                }
                 $failure ??= $error;
+            } finally {
+                $release?->__invoke();
             }
         }
         throw $failure ?? new \RuntimeException('its name has no address');
@@ -360,7 +481,7 @@ final class EngineClient implements Client
     /**
      * @param resource $stream
      */
-    private function encrypt(EventLoop $loop, mixed $stream, float $deadline): void
+    private function encrypt(EventLoop $loop, mixed $stream, float $deadline, ?Cancellation $cancellation = null): void
     {
         while (true) {
             error_clear_last();
@@ -374,7 +495,7 @@ final class EngineClient implements Client
                 throw new \RuntimeException('the encrypted connection could not be made: ' . trim((string) preg_replace('/^stream_socket_enable_crypto\(\):\s*/', '', $why)));
             }
             // Neither done nor failed: the handshake waits for the server's next message.
-            $this->await($loop, $stream, false, $deadline);
+            $this->await($loop, $stream, false, $deadline, $cancellation);
         }
     }
 
@@ -384,8 +505,9 @@ final class EngineClient implements Client
      *
      * @param resource $stream
      */
-    private function await(EventLoop $loop, mixed $stream, bool $writable, float $deadline): void
+    private function await(EventLoop $loop, mixed $stream, bool $writable, float $deadline, ?Cancellation $cancellation = null): void
     {
+        $cancellation?->throwIfCancelled();
         $left = $deadline - hrtime(true) / 1_000_000_000;
         if ($left <= 0) {
             throw new \RuntimeException("it did not answer within {$this->timeout} seconds");
@@ -406,12 +528,24 @@ final class EngineClient implements Client
         };
         $watcher = $writable ? $loop->onWritable($stream, static fn () => $finish()) : $loop->onReadable($stream, static fn () => $finish());
         $timer = $loop->delay($left, static fn () => $finish(true));
+        $unsubscribe = $cancellation?->subscribe(static function (CancelledException $error) use ($loop, $watcher, $timer, $suspension, &$settled): void {
+            // Remove watchers even if readiness has already queued a resume,
+            // and even when the worker will never run another loop turn.
+            $loop->cancel($watcher);
+            $loop->cancel($timer);
+            if (!$settled) {
+                $settled = true;
+                $suspension->throw($error);
+            }
+        });
         try {
             $suspension->suspend();
+            $cancellation?->throwIfCancelled();
         } finally {
             $settled = true;
             $loop->cancel($watcher);
             $loop->cancel($timer);
+            $unsubscribe?->__invoke();
         }
     }
 

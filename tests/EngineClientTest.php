@@ -15,6 +15,34 @@ use PHPUnit\Framework\Attributes\DataProvider;
 
 final class EngineClientTest extends RedisTestCase
 {
+    public function testCloseCancelsTheOpenerAndItsWaitersWithoutDisturbingANewConnection(): void
+    {
+        WorkerHarness::run([], function (Worker $worker): void {
+            $redis = new EngineClient($this->url);
+            $before = $worker->loop->getIdentifiers();
+            $first = $worker->spawn(fn () => $this->timedCommand($redis, 'PING'));
+            $second = $worker->spawn(fn () => $this->timedCommand($redis, 'PING'));
+            $replacement = $worker->spawn(static function () use ($redis): mixed {
+                $redis->close();
+                // Begin again before the cancelled opener has resumed its cleanup.
+                return $redis->command('PING');
+            });
+            try {
+                self::assertInstanceOf(RedisException::class, $first->await()[0]);
+                self::assertInstanceOf(RedisException::class, $second->await()[0]);
+                self::assertSame('PONG', $replacement->await());
+                $redis->close();
+                $redis->close();
+                Async::sleep($worker->loop, 0);
+                self::assertSame($before, $worker->loop->getIdentifiers());
+                // A reader left on a closed stream used to crash this loop turn.
+                Async::sleep($worker->loop, 0.01);
+            } finally {
+                $redis->close();
+            }
+        });
+    }
+
     public function testASilentServerFailsTheCommandAfterItsReplyTimeout(): void
     {
         WorkerHarness::run([], function (Worker $worker): void {
