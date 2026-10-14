@@ -306,7 +306,7 @@ final class BroadcastCarrierTest extends TestCase
         $container->instance(Client::class, $client);
         $carrier = $this->carriers[] = $container->get(\Crab\Contracts\Broadcast\Carrier::class);
         $this->waitFor('Redis channel join confirmation', static fn () => $carrier->subscribe('orders', static function (): void {}, static function (): void {}));
-        $worker = new \Crab\Engine\Process\Worker($this->loop, new \Crab\Engine\WorkerGroup('test'), 0, [], 1.0);
+        $worker = new \Crab\Engine\Process\Worker($this->loop, new \Crab\Engine\Crab('test'), 0, [], 1.0);
         $provider->stop($worker, $container);
         $broadcastProvider->stop($worker, $container);
         $this->broker->close();
