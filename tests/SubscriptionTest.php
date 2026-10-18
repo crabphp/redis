@@ -23,7 +23,7 @@ final class SubscriptionTest extends RedisTestCase
             $first = $this->redis->subscribe($this->prefix . 'orders');
             $second = $this->redis->subscribe($this->prefix . 'orders');
             try {
-                $waiting = $worker->spawn(fn () => $this->take($first, 1));
+                $waiting = $worker->spawn(fn() => $this->take($first, 1));
                 Async::sleep($worker->loop, 0);
                 self::assertFalse($waiting->isComplete());
                 self::assertSame(2, $this->redis->publish($this->prefix . 'orders', 'ready'));
@@ -44,7 +44,7 @@ final class SubscriptionTest extends RedisTestCase
             $b = $this->prefix . 'b';
             $subscription = $this->redis->subscribe($a, $a);
             try {
-                $waiting = $worker->spawn(fn () => $this->take($subscription, 2));
+                $waiting = $worker->spawn(fn() => $this->take($subscription, 2));
                 Async::sleep($worker->loop, 0);
                 $subscription->add($b, $b);
                 $subscription->remove($a, $this->prefix . 'unknown');
@@ -82,9 +82,14 @@ final class SubscriptionTest extends RedisTestCase
         WorkerHarness::run([], function (Worker $worker): void {
             $channel = $this->prefix . "\0\xff\r\n";
             $subscription = $this->redis->subscribe($channel);
-            $payloads = ["\0\xff\xfe\r\n*3\r\n", '', str_repeat("\0\r\n\xff", 40_000), ...array_map(strval(...), range(1, 100))];
+            $payloads = [
+                "\0\xff\xfe\r\n*3\r\n",
+                '',
+                str_repeat("\0\r\n\xff", 40_000),
+                ...array_map(strval(...), range(1, 100)),
+            ];
             try {
-                $waiting = $worker->spawn(fn () => $this->take($subscription, count($payloads)));
+                $waiting = $worker->spawn(fn() => $this->take($subscription, count($payloads)));
                 foreach ($payloads as $payload) {
                     self::assertSame(1, $this->redis->publish($channel, $payload));
                 }
@@ -106,7 +111,7 @@ final class SubscriptionTest extends RedisTestCase
                 for ($index = 0; $index < 50; ++$index) {
                     $this->redis->publish($channel, (string) $index);
                 }
-                $this->until($worker, static fn (): bool => $subscription->dropped() === 47);
+                $this->until($worker, static fn(): bool => $subscription->dropped() === 47);
                 self::assertSame(['47', '48', '49'], array_column($this->take($subscription, 3), 1));
                 self::assertSame(47, $subscription->dropped());
                 self::assertSame(0, $subscription->gaps());
@@ -122,7 +127,7 @@ final class SubscriptionTest extends RedisTestCase
         WorkerHarness::run([], function (Worker $worker): void {
             $subscription = $this->redis->subscribe($this->prefix . 'single');
             try {
-                $first = $worker->spawn(fn () => $this->take($subscription, 1));
+                $first = $worker->spawn(fn() => $this->take($subscription, 1));
                 Async::sleep($worker->loop, 0);
                 try {
                     $this->take($subscription, 1);
@@ -167,7 +172,7 @@ final class SubscriptionTest extends RedisTestCase
     {
         WorkerHarness::run([], function (Worker $worker): void {
             $subscription = $this->redis->subscribe($this->prefix . 'close');
-            $waiting = $worker->spawn(fn () => $this->take($subscription, 1));
+            $waiting = $worker->spawn(fn() => $this->take($subscription, 1));
             Async::sleep($worker->loop, 0);
             $subscription->close();
             $subscription->close();
@@ -188,7 +193,9 @@ final class SubscriptionTest extends RedisTestCase
     {
         WorkerHarness::run([], function (Worker $worker): void {
             $reports = [];
-            $previous = FailureReporter::handleWith(static function (string $what, ?\Throwable $error) use (&$reports): void {
+            $previous = FailureReporter::handleWith(static function (string $what, ?\Throwable $error) use (
+                &$reports,
+            ): void {
                 $reports[] = [$what, $error];
             });
             $a = $this->prefix . 'old';
@@ -198,9 +205,9 @@ final class SubscriptionTest extends RedisTestCase
                 $subscription->add($b);
                 $subscription->remove($a);
                 $id = $this->subscriberId($b);
-                $waiting = $worker->spawn(fn () => $this->take($subscription, 1));
+                $waiting = $worker->spawn(fn() => $this->take($subscription, 1));
                 self::assertSame(1, $this->redis->command('CLIENT', 'KILL', 'ID', $id));
-                $this->until($worker, fn (): bool => $this->redis->command('PUBSUB', 'NUMSUB', $b)[1] === 1);
+                $this->until($worker, fn(): bool => $this->redis->command('PUBSUB', 'NUMSUB', $b)[1] === 1);
                 self::assertSame(0, $this->redis->publish($a, 'removed'));
                 self::assertSame(1, $this->redis->publish($b, 'after gap'));
                 self::assertSame([[$b, 'after gap']], $waiting->await());
@@ -225,14 +232,14 @@ final class SubscriptionTest extends RedisTestCase
                 foreach (['1', '2', '3'] as $payload) {
                     $this->redis->publish($channel, $payload);
                 }
-                $buffer = (new \ReflectionProperty($subscription, 'messages'))->getValue($subscription);
-                $this->until($worker, static fn (): bool => $buffer->count() === 3);
+                $buffer = new \ReflectionProperty($subscription, 'messages')->getValue($subscription);
+                $this->until($worker, static fn(): bool => $buffer->count() === 3);
                 $this->redis->command('CLIENT', 'KILL', 'ID', $this->subscriberId($channel));
-                $this->until($worker, static fn (): bool => $subscription->gaps() === 1);
+                $this->until($worker, static fn(): bool => $subscription->gaps() === 1);
                 self::assertSame(0, $buffer->count());
                 self::assertSame(3, $subscription->dropped());
                 $state = 4; // Authoritative state reloaded after noticing the gap.
-                $this->until($worker, fn (): bool => $this->redis->command('PUBSUB', 'NUMSUB', $channel)[1] === 1);
+                $this->until($worker, fn(): bool => $this->redis->command('PUBSUB', 'NUMSUB', $channel)[1] === 1);
                 $this->redis->publish($channel, '5');
                 foreach ($subscription as $payload) {
                     $state = (int) $payload;
@@ -253,20 +260,25 @@ final class SubscriptionTest extends RedisTestCase
             $peer = null;
             // Both frames arrive in one read, before the resumed consumer
             // fiber gets a turn to yield the stale publication.
-            [$url, $close] = $this->server($worker->loop, static function (array $words, mixed $stream) use (&$peer): string {
+            [$url, $close] = $this->server($worker->loop, static function (array $words, mixed $stream) use (
+                &$peer,
+            ): string {
                 $peer = $stream;
                 return Resp::command(['subscribe', $words[1], 1]);
             });
             $redis = new EngineClient($url);
             try {
                 $subscription = $redis->subscribe('in flight');
-                $waiting = $worker->spawn(fn () => $this->take($subscription, 1));
+                $waiting = $worker->spawn(fn() => $this->take($subscription, 1));
                 Async::sleep($worker->loop, 0);
                 fwrite($peer, Resp::command(['message', 'in flight', 'stale']) . "?broken\r\n");
-                $this->until($worker, static fn (): bool => $subscription->gaps() === 1);
+                $this->until($worker, static fn(): bool => $subscription->gaps() === 1);
                 self::assertSame(1, $subscription->dropped());
                 self::assertFalse($waiting->isComplete());
-                $this->until($worker, static fn (): bool => (new \ReflectionProperty($subscription, 'connected'))->getValue($subscription));
+                $this->until($worker, static fn(): bool => new \ReflectionProperty(
+                    $subscription,
+                    'connected',
+                )->getValue($subscription));
                 fwrite($peer, Resp::command(['message', 'in flight', 'new']));
                 self::assertSame([['in flight', 'new']], $waiting->await());
             } finally {
@@ -294,10 +306,16 @@ final class SubscriptionTest extends RedisTestCase
             $reports = [];
             $commands = [];
             $peer = null;
-            $previous = FailureReporter::handleWith(static function (string $what, ?\Throwable $error) use (&$reports): void {
+            $previous = FailureReporter::handleWith(static function (string $what, ?\Throwable $error) use (
+                &$reports,
+            ): void {
                 $reports[] = [$what, $error];
             });
-            [$url, $close] = $this->server($worker->loop, static function (array $words, mixed $stream, int $connection) use ($refused, &$commands, &$peer): string {
+            [$url, $close] = $this->server($worker->loop, static function (
+                array $words,
+                mixed $stream,
+                int $connection,
+            ) use ($refused, &$commands, &$peer): string {
                 $commands[] = [$connection, $words[0]];
                 if ($connection > 1 && $words[0] === $refused) {
                     return "-ERR credentials or database refused secret-password\r\n";
@@ -337,7 +355,7 @@ final class SubscriptionTest extends RedisTestCase
                 }
                 self::assertCount(2, $reports); // The transport gap and the terminal refusal.
                 self::assertSame($error, $reports[1][1]);
-                self::assertNull((new \ReflectionProperty($subscription, 'reconnectTimer'))->getValue($subscription));
+                self::assertNull(new \ReflectionProperty($subscription, 'reconnectTimer')->getValue($subscription));
                 $attempts = count($commands);
                 Async::sleep($worker->loop, 0.3);
                 self::assertCount($attempts, $commands);
@@ -356,7 +374,9 @@ final class SubscriptionTest extends RedisTestCase
         try {
             WorkerHarness::run([], function (Worker $worker) use ($user): void {
                 $reports = [];
-                $previous = FailureReporter::handleWith(static function (string $what, ?\Throwable $error) use (&$reports): void {
+                $previous = FailureReporter::handleWith(static function (string $what, ?\Throwable $error) use (
+                    &$reports,
+                ): void {
                     $reports[] = $error;
                 });
                 $host = parse_url($this->url, PHP_URL_HOST) . ':' . parse_url($this->url, PHP_URL_PORT);
@@ -374,7 +394,7 @@ final class SubscriptionTest extends RedisTestCase
                     });
                     $this->redis->command('ACL', 'SETUSER', $user, 'resetpass', '>new-password');
                     $this->redis->command('CLIENT', 'KILL', 'ID', $this->subscriberId($channel));
-                    $this->until($worker, static fn (): bool => $waiting->isComplete());
+                    $this->until($worker, static fn(): bool => $waiting->isComplete());
                     $error = $waiting->await();
                     self::assertInstanceOf(RedisException::class, $error);
                     self::assertStringContainsString('AUTH', $error->getMessage());
@@ -399,10 +419,15 @@ final class SubscriptionTest extends RedisTestCase
     public function testAQuietSubscriptionOutlivesTheReplyTimeoutAndAnswersIdlePings(): void
     {
         WorkerHarness::run([], function (Worker $worker): void {
-            $redis = new EngineClient($this->url, replyTimeout: 0.05, subscriptionIdleInterval: 0.04, subscriptionPingTimeout: 0.1);
+            $redis = new EngineClient(
+                $this->url,
+                replyTimeout: 0.05,
+                subscriptionIdleInterval: 0.04,
+                subscriptionPingTimeout: 0.1,
+            );
             $subscription = $redis->subscribe($this->prefix . 'quiet');
             try {
-                $waiting = $worker->spawn(fn () => $this->take($subscription, 1));
+                $waiting = $worker->spawn(fn() => $this->take($subscription, 1));
                 Async::sleep($worker->loop, 0.25);
                 self::assertFalse($waiting->isComplete());
                 self::assertSame(0, $subscription->gaps());
@@ -424,20 +449,22 @@ final class SubscriptionTest extends RedisTestCase
             $server = new SubscriptionRedisServer();
             $redis = new EngineClient($server->url, timeout: 0.1);
             $reports = [];
-            $previous = FailureReporter::handleWith(static function (string $what, ?\Throwable $error) use (&$reports): void {
+            $previous = FailureReporter::handleWith(static function (string $what, ?\Throwable $error) use (
+                &$reports,
+            ): void {
                 $reports[] = [$what, $error];
             });
             try {
                 $server->start($worker);
                 $subscription = $redis->subscribe('restart');
-                $waiting = $worker->spawn(fn () => $this->take($subscription, 1));
+                $waiting = $worker->spawn(fn() => $this->take($subscription, 1));
                 $server->stop($worker);
-                $this->until($worker, static fn (): bool => $subscription->gaps() === 1);
+                $this->until($worker, static fn(): bool => $subscription->gaps() === 1);
                 Async::sleep($worker->loop, 0.75);
                 self::assertCount(1, $reports);
                 self::assertFalse($waiting->isComplete());
                 $server->start($worker);
-                $this->until($worker, static fn (): bool => $redis->command('PUBSUB', 'NUMSUB', 'restart')[1] === 1);
+                $this->until($worker, static fn(): bool => $redis->command('PUBSUB', 'NUMSUB', 'restart')[1] === 1);
                 self::assertSame(1, $redis->publish('restart', 'after restart'));
                 self::assertSame([['restart', 'after restart']], $waiting->await());
                 self::assertSame(1, $subscription->gaps());
@@ -462,7 +489,7 @@ final class SubscriptionTest extends RedisTestCase
             try {
                 for ($outage = 1; $outage <= 2; ++$outage) {
                     $this->redis->command('CLIENT', 'KILL', 'ID', $this->subscriberId($channel));
-                    $this->until($worker, fn (): bool => $this->redis->command('PUBSUB', 'NUMSUB', $channel)[1] === 1);
+                    $this->until($worker, fn(): bool => $this->redis->command('PUBSUB', 'NUMSUB', $channel)[1] === 1);
                     self::assertSame($outage, $subscription->gaps());
                     self::assertCount($outage, $reports);
                 }
@@ -485,11 +512,16 @@ final class SubscriptionTest extends RedisTestCase
                 $commands[] = $words[0];
                 return $words[0] === 'SUBSCRIBE' ? Resp::command(['subscribe', $words[1], 1]) : null;
             });
-            $redis = new EngineClient($url, replyTimeout: 0.02, subscriptionIdleInterval: 0.04, subscriptionPingTimeout: 0.04);
+            $redis = new EngineClient(
+                $url,
+                replyTimeout: 0.02,
+                subscriptionIdleInterval: 0.04,
+                subscriptionPingTimeout: 0.04,
+            );
             try {
                 $subscription = $redis->subscribe('silent');
-                $waiting = $worker->spawn(fn () => $this->take($subscription, 1));
-                $this->until($worker, static fn (): bool => $subscription->gaps() === 1);
+                $waiting = $worker->spawn(fn() => $this->take($subscription, 1));
+                $this->until($worker, static fn(): bool => $subscription->gaps() === 1);
                 self::assertContains('PING', $commands);
                 self::assertFalse($waiting->isComplete());
                 self::assertCount(1, $reports);
@@ -511,17 +543,21 @@ final class SubscriptionTest extends RedisTestCase
             $previous = FailureReporter::handleWith(static function (string $what) use (&$reports): void {
                 $reports[] = $what;
             });
-            [$url, $close] = $this->server($worker->loop, static function (array $words, mixed $stream, int $connection) use (&$connections): ?string {
+            [$url, $close] = $this->server($worker->loop, static function (
+                array $words,
+                mixed $stream,
+                int $connection,
+            ) use (&$connections): ?string {
                 $connections = $connection;
                 return Resp::command(['subscribe', $words[1], 1]);
             });
             $redis = new EngineClient($url);
             try {
                 $subscription = $redis->subscribe('closing');
-                $waiting = $worker->spawn(fn () => $this->take($subscription, 1));
+                $waiting = $worker->spawn(fn() => $this->take($subscription, 1));
                 Async::sleep($worker->loop, 0);
                 $close();
-                $this->until($worker, static fn (): bool => $subscription->gaps() === 1);
+                $this->until($worker, static fn(): bool => $subscription->gaps() === 1);
                 Async::sleep($worker->loop, 0.4);
                 self::assertSame(1, $subscription->gaps());
                 self::assertCount(1, $reports);
@@ -529,7 +565,7 @@ final class SubscriptionTest extends RedisTestCase
                 self::assertSame([], $waiting->await());
                 Async::sleep($worker->loop, 0.25);
                 self::assertSame(1, $connections);
-                self::assertNull((new \ReflectionProperty($subscription, 'reconnectTimer'))->getValue($subscription));
+                self::assertNull(new \ReflectionProperty($subscription, 'reconnectTimer')->getValue($subscription));
             } finally {
                 $redis->close();
                 $close();
@@ -555,7 +591,10 @@ final class SubscriptionTest extends RedisTestCase
                 $close();
             }
 
-            [$url, $close] = $this->server($worker->loop, static fn (): string => "-ERR secret-password was refused\r\n");
+            [$url, $close] = $this->server(
+                $worker->loop,
+                static fn(): string => "-ERR secret-password was refused\r\n",
+            );
             $redis = new EngineClient($url . '?password=secret-password&database=2');
             try {
                 $redis->subscribe('refused');
@@ -577,9 +616,9 @@ final class SubscriptionTest extends RedisTestCase
             $subscription = $this->redis->subscribe();
             try {
                 $changes = [
-                    $worker->spawn(static fn () => $subscription->add($channel)),
-                    $worker->spawn(static fn () => $subscription->remove($channel)),
-                    $worker->spawn(static fn () => $subscription->add($channel)),
+                    $worker->spawn(static fn() => $subscription->add($channel)),
+                    $worker->spawn(static fn() => $subscription->remove($channel)),
+                    $worker->spawn(static fn() => $subscription->add($channel)),
                 ];
                 foreach ($changes as $change) {
                     $change->await();
@@ -597,7 +636,10 @@ final class SubscriptionTest extends RedisTestCase
         WorkerHarness::run([], function (Worker $worker): void {
             $pending = $worker->loop->getSuspension();
             $stream = null;
-            [$url, $close] = $this->server($worker->loop, static function (array $words, mixed $socket) use ($pending, &$stream): ?string {
+            [$url, $close] = $this->server($worker->loop, static function (array $words, mixed $socket) use (
+                $pending,
+                &$stream,
+            ): ?string {
                 if ($words[0] === 'SUBSCRIBE' && $words[1] === 'later') {
                     $stream = $socket;
                     $pending->resume();
@@ -608,7 +650,7 @@ final class SubscriptionTest extends RedisTestCase
             $redis = new EngineClient($url);
             try {
                 $subscription = $redis->subscribe('original');
-                $adding = $worker->spawn(static fn () => $subscription->add('later'));
+                $adding = $worker->spawn(static fn() => $subscription->add('later'));
                 $pending->suspend();
                 self::assertFalse($adding->isComplete());
                 self::assertSame([['original', 'before confirmation']], $this->take($subscription, 1));
@@ -645,9 +687,9 @@ final class SubscriptionTest extends RedisTestCase
                         return $error;
                     }
                 };
-                $pending = $worker->spawn(static fn () => $change('pending'));
+                $pending = $worker->spawn(static fn() => $change('pending'));
                 $received->suspend();
-                $queued = $worker->spawn(static fn () => $change('queued'));
+                $queued = $worker->spawn(static fn() => $change('queued'));
                 Async::sleep($worker->loop, 0);
                 $subscription->close();
                 self::assertInstanceOf(RedisException::class, $pending->await());
@@ -662,7 +704,7 @@ final class SubscriptionTest extends RedisTestCase
     public function testASetupTimeoutFailsWithoutLeavingAConnectionOrRetry(): void
     {
         WorkerHarness::run([], function (Worker $worker): void {
-            [$url, $close] = $this->server($worker->loop, static fn (): null => null);
+            [$url, $close] = $this->server($worker->loop, static fn(): null => null);
             $redis = new EngineClient($url, replyTimeout: 0.05);
             try {
                 try {
@@ -670,7 +712,7 @@ final class SubscriptionTest extends RedisTestCase
                     self::fail('An unconfirmed subscription was returned.');
                 } catch (RedisException $error) {
                     self::assertStringContainsString('did not confirm SUBSCRIBE', $error->getMessage());
-                    self::assertSame([], (new \ReflectionProperty($redis, 'subscriptions'))->getValue($redis));
+                    self::assertSame([], new \ReflectionProperty($redis, 'subscriptions')->getValue($redis));
                 }
             } finally {
                 $redis->close();
@@ -681,7 +723,7 @@ final class SubscriptionTest extends RedisTestCase
 
     public function testClientCloseCancelsAnEncryptedConnectionStillBeingOpened(): void
     {
-        WorkerHarness::run([], function (Worker $worker): void {
+        WorkerHarness::run([], static function (Worker $worker): void {
             $accepted = $worker->loop->getSuspension();
             $listener = stream_socket_server('tcp://127.0.0.1:0', $code, $reason);
             self::assertIsResource($listener, (string) $reason);
@@ -715,7 +757,7 @@ final class SubscriptionTest extends RedisTestCase
                 }
                 self::assertInstanceOf(RedisException::class, $opening->await());
                 self::assertLessThan(1_000_000_000, hrtime(true) - $start);
-                self::assertSame([], (new \ReflectionProperty($redis, 'subscriptions'))->getValue($redis));
+                self::assertSame([], new \ReflectionProperty($redis, 'subscriptions')->getValue($redis));
                 self::assertLessThan(count($before), count($worker->loop->getIdentifiers()));
             } finally {
                 $redis->close();
@@ -731,7 +773,10 @@ final class SubscriptionTest extends RedisTestCase
     public function testAMalformedReplyAfterConfirmationDoesNotReturnABrokenSubscription(): void
     {
         WorkerHarness::run([], function (Worker $worker): void {
-            [$url, $close] = $this->server($worker->loop, static fn (array $words): string => Resp::command(['subscribe', $words[1], 1]) . "?broken\r\n");
+            [$url, $close] = $this->server(
+                $worker->loop,
+                static fn(array $words): string => Resp::command(['subscribe', $words[1], 1]) . "?broken\r\n",
+            );
             $redis = new EngineClient($url);
             try {
                 try {
@@ -739,7 +784,7 @@ final class SubscriptionTest extends RedisTestCase
                     self::fail('A broken subscription escaped its initial setup.');
                 } catch (RedisException $error) {
                     self::assertStringContainsString('before the subscription was ready', $error->getMessage());
-                    self::assertSame([], (new \ReflectionProperty($redis, 'subscriptions'))->getValue($redis));
+                    self::assertSame([], new \ReflectionProperty($redis, 'subscriptions')->getValue($redis));
                 }
             } finally {
                 $redis->close();
@@ -756,7 +801,9 @@ final class SubscriptionTest extends RedisTestCase
         try {
             WorkerHarness::run([], function () use ($user, $password): void {
                 $address = parse_url($this->url, PHP_URL_HOST) . ':' . parse_url($this->url, PHP_URL_PORT);
-                $redis = new EngineClient('redis://' . $user . '@' . $address . '?password=' . rawurlencode($password) . '&database=2');
+                $redis = new EngineClient(
+                    'redis://' . $user . '@' . $address . '?password=' . rawurlencode($password) . '&database=2',
+                );
                 try {
                     $subscription = $redis->subscribe($this->prefix . 'authenticated');
                     self::assertSame(1, $redis->publish($this->prefix . 'authenticated', 'authenticated'));
@@ -776,12 +823,22 @@ final class SubscriptionTest extends RedisTestCase
         $certificate = tempnam(sys_get_temp_dir(), 'crab-redis-tls-cert-');
         $keyFile = tempnam(sys_get_temp_dir(), 'crab-redis-tls-key-');
         try {
-            file_put_contents($config, "[req]\ndistinguished_name=dn\n[dn]\n[v3]\nsubjectAltName=IP:127.0.0.1\nbasicConstraints=CA:TRUE\nkeyUsage=digitalSignature,keyEncipherment,keyCertSign\n");
+            file_put_contents(
+                $config,
+                "[req]\ndistinguished_name=dn\n[dn]\n[v3]\nsubjectAltName=IP:127.0.0.1\nbasicConstraints=CA:TRUE\nkeyUsage=digitalSignature,keyEncipherment,keyCertSign\n",
+            );
             $key = openssl_pkey_new(['private_key_bits' => 2048]);
             self::assertNotFalse($key);
-            $request = openssl_csr_new(['commonName' => '127.0.0.1'], $key, ['config' => $config, 'digest_alg' => 'sha256']);
+            $request = openssl_csr_new(['commonName' => '127.0.0.1'], $key, [
+                'config' => $config,
+                'digest_alg' => 'sha256',
+            ]);
             self::assertNotFalse($request);
-            $cert = openssl_csr_sign($request, null, $key, 1, ['config' => $config, 'x509_extensions' => 'v3', 'digest_alg' => 'sha256']);
+            $cert = openssl_csr_sign($request, null, $key, 1, [
+                'config' => $config,
+                'x509_extensions' => 'v3',
+                'digest_alg' => 'sha256',
+            ]);
             self::assertNotFalse($cert);
             self::assertTrue(openssl_x509_export_to_file($cert, $certificate));
             self::assertTrue(openssl_pkey_export_to_file($key, $keyFile));
@@ -792,7 +849,7 @@ final class SubscriptionTest extends RedisTestCase
                     $server->start($worker);
                     $subscription = $redis->subscribe('encrypted');
                     self::assertSame(1, $redis->publish('encrypted', "secret\0payload"));
-                    self::assertSame([["encrypted", "secret\0payload"]], $this->take($subscription, 1));
+                    self::assertSame([['encrypted', "secret\0payload"]], $this->take($subscription, 1));
                     self::assertSame(0, $subscription->gaps());
                 } finally {
                     $redis->close();
@@ -860,7 +917,11 @@ final class SubscriptionTest extends RedisTestCase
     {
         $deadline = hrtime(true) + 5_000_000_000;
         while (!$condition()) {
-            self::assertLessThan($deadline, hrtime(true), 'The asynchronous condition did not become true within five seconds.');
+            self::assertLessThan(
+                $deadline,
+                hrtime(true),
+                'The asynchronous condition did not become true within five seconds.',
+            );
             Async::sleep($worker->loop, 0.01);
         }
     }
@@ -890,7 +951,14 @@ final class SubscriptionTest extends RedisTestCase
         $streams = [$listener];
         $watchers = [];
         $connections = 0;
-        $accept = $loop->onReadable($listener, static function () use ($listener, $loop, $answer, &$streams, &$watchers, &$connections): void {
+        $accept = $loop->onReadable($listener, static function () use (
+            $listener,
+            $loop,
+            $answer,
+            &$streams,
+            &$watchers,
+            &$connections,
+        ): void {
             $stream = stream_socket_accept($listener, 0);
             if ($stream === false) {
                 return;
@@ -899,9 +967,15 @@ final class SubscriptionTest extends RedisTestCase
             $streams[] = $stream;
             $connection = ++$connections;
             $received = '';
-            $reader = $loop->onReadable($stream, static function (string $watcher) use ($stream, $loop, $answer, $connection, &$received): void {
+            $reader = $loop->onReadable($stream, static function (string $watcher) use (
+                $stream,
+                $loop,
+                $answer,
+                $connection,
+                &$received,
+            ): void {
                 $bytes = fread($stream, 65_536);
-                if ($bytes === false || ($bytes === '' && feof($stream))) {
+                if ($bytes === false || $bytes === '' && feof($stream)) {
                     $loop->cancel($watcher);
                     return;
                 }
@@ -924,14 +998,17 @@ final class SubscriptionTest extends RedisTestCase
         });
         $loop->unreference($accept);
         $watchers[] = $accept;
-        return ['redis://' . $address, static function () use ($loop, &$streams, &$watchers): void {
-            foreach ($watchers as $watcher) {
-                $loop->cancel($watcher);
-            }
-            foreach ($streams as $stream) {
-                fclose($stream);
-            }
-            $streams = $watchers = [];
-        }];
+        return [
+            'redis://' . $address,
+            static function () use ($loop, &$streams, &$watchers): void {
+                foreach ($watchers as $watcher) {
+                    $loop->cancel($watcher);
+                }
+                foreach ($streams as $stream) {
+                    fclose($stream);
+                }
+                $streams = $watchers = [];
+            },
+        ];
     }
 }

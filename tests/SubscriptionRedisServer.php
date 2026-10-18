@@ -29,8 +29,9 @@ final class SubscriptionRedisServer
     /**
      * @param array{cert: string, key: string}|array{} $tls
      */
-    public function __construct(private readonly array $tls = [])
-    {
+    public function __construct(
+        private readonly array $tls = [],
+    ) {
         $listener = stream_socket_server('tcp://127.0.0.1:0', $code, $reason);
         if ($listener === false) {
             throw new \RuntimeException('Could not reserve a port for the disposable Redis: ' . $reason);
@@ -46,12 +47,31 @@ final class SubscriptionRedisServer
     {
         $this->process = proc_open(
             [
-                'redis-server', '--bind', '127.0.0.1', '--port', (string) ($this->tls === [] ? $this->port : 0), '--save', '', '--appendonly', 'no',
-                ...($this->tls === [] ? [] : [
-                    '--tls-port', (string) $this->port,
-                    '--tls-cert-file', $this->tls['cert'], '--tls-key-file', $this->tls['key'],
-                    '--tls-ca-cert-file', $this->tls['cert'], '--tls-auth-clients', 'no',
-                ]),
+                'redis-server',
+                '--bind',
+                '127.0.0.1',
+                '--port',
+                (string) ($this->tls === [] ? $this->port : 0),
+                '--save',
+                '',
+                '--appendonly',
+                'no',
+                ...(
+                    $this->tls === []
+                        ? []
+                        : [
+                            '--tls-port',
+                            (string) $this->port,
+                            '--tls-cert-file',
+                            $this->tls['cert'],
+                            '--tls-key-file',
+                            $this->tls['key'],
+                            '--tls-ca-cert-file',
+                            $this->tls['cert'],
+                            '--tls-auth-clients',
+                            'no',
+                        ]
+                ),
             ],
             [0 => ['file', '/dev/null', 'r'], 1 => $this->log, 2 => $this->log],
             $pipes,
@@ -59,12 +79,18 @@ final class SubscriptionRedisServer
         if (!is_resource($this->process)) {
             throw new \RuntimeException('Could not start the disposable Redis process. Install redis-server on PATH.');
         }
-        $redis = new EngineClient($this->url, timeout: 0.5, tls: $this->tls === [] ? [] : ['cafile' => $this->tls['cert']]);
+        $redis = new EngineClient(
+            $this->url,
+            timeout: 0.5,
+            tls: $this->tls === [] ? [] : ['cafile' => $this->tls['cert']],
+        );
         $deadline = hrtime(true) + 5_000_000_000;
         while (hrtime(true) < $deadline) {
             if (!proc_get_status($this->process)['running']) {
                 rewind($this->log);
-                throw new \RuntimeException('The disposable Redis stopped during startup: ' . stream_get_contents($this->log));
+                throw new \RuntimeException(
+                    'The disposable Redis stopped during startup: ' . stream_get_contents($this->log),
+                );
             }
             try {
                 $redis->command('PING');

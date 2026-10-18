@@ -7,24 +7,24 @@ namespace Crab\Redis\Tests;
 use Crab\App;
 use Crab\Cache\CacheProvider;
 use Crab\Config\Config;
-use Crab\Container\Container;
-use Crab\Contracts\Config\Config as ConfigContract;
-use Crab\Contracts\Container\Container as ContainerContract;
 use Crab\Console\Output;
+use Crab\Container\Container;
 use Crab\Contracts\Cache\Cache;
 use Crab\Contracts\Cache\Store as CacheStoreContract;
+use Crab\Contracts\Config\Config as ConfigContract;
+use Crab\Contracts\Container\Container as ContainerContract;
 use Crab\Contracts\Queue\Queue;
 use Crab\Contracts\Queue\Store as QueueStoreContract;
+use Crab\Engine\Async\Async;
+use Crab\Engine\Process\Worker;
 use Crab\Queue\QueueProvider;
-use Crab\Redis\EngineClient;
 use Crab\Redis\CacheStore;
 use Crab\Redis\Client;
+use Crab\Redis\EngineClient;
 use Crab\Redis\QueueStore;
 use Crab\Redis\RedisException;
 use Crab\Redis\RedisProvider;
 use Crab\Redis\Subscription;
-use Crab\Engine\Process\Worker;
-use Crab\Engine\Async\Async;
 use Crab\Testing\WorkerHarness;
 
 final class Sent
@@ -70,7 +70,10 @@ final class RedisProviderTest extends RedisTestCase
 
     public function testTheCacheAndTheQueueAreKeptInRedisWhereTheyAreSetTo(): void
     {
-        $app = $this->app(['cache' => ['store' => 'redis'], 'queue' => ['store' => 'redis', 'tries' => 2, 'backoff' => [0]]]);
+        $app = $this->app([
+            'cache' => ['store' => 'redis'],
+            'queue' => ['store' => 'redis', 'tries' => 2, 'backoff' => [0]],
+        ]);
 
         self::assertInstanceOf(EngineClient::class, $app->container->get(Client::class));
         self::assertInstanceOf(CacheStore::class, $app->container->get(CacheStoreContract::class));
@@ -109,7 +112,7 @@ final class RedisProviderTest extends RedisTestCase
 
         self::assertNotInstanceOf(CacheStore::class, $app->container->get(CacheStoreContract::class));
         self::assertNotInstanceOf(QueueStore::class, $app->container->get(QueueStoreContract::class));
-        self::assertSame('redis://127.0.0.1:6379', (new Config())->get('redis.url', 'redis://127.0.0.1:6379'));
+        self::assertSame('redis://127.0.0.1:6379', new Config()->get('redis.url', 'redis://127.0.0.1:6379'));
     }
 
     public function testTheReplyTimeoutDefaultsToFiveSeconds(): void
@@ -118,7 +121,7 @@ final class RedisProviderTest extends RedisTestCase
         $redis = $app->container->get(Client::class);
 
         self::assertSame(5.0, $app->config->get('redis.reply_timeout'));
-        self::assertSame(5.0, (new \ReflectionProperty($redis, 'replyTimeout'))->getValue($redis));
+        self::assertSame(5.0, new \ReflectionProperty($redis, 'replyTimeout')->getValue($redis));
     }
 
     public function testStoppingTheWorkerClosesItsSubscriptionsAndOrdinaryConnection(): void
@@ -127,16 +130,20 @@ final class RedisProviderTest extends RedisTestCase
         $container->instance(ConfigContract::class, new Config(['redis' => ['url' => $this->url]]));
         $subscription = null;
         $redis = null;
-        WorkerHarness::run([new RedisProvider()], function (Worker $worker, ContainerContract $container) use (&$subscription, &$redis): void {
-            $redis = $container->get(Client::class);
-            $redis->command('PING');
-            $subscription = $redis->subscribe($this->prefix . 'worker');
-            self::assertSame(1, $redis->publish($this->prefix . 'worker', 'before stop'));
-        }, $container);
+        WorkerHarness::run(
+            [new RedisProvider()],
+            function (Worker $worker, ContainerContract $container) use (&$subscription, &$redis): void {
+                $redis = $container->get(Client::class);
+                $redis->command('PING');
+                $subscription = $redis->subscribe($this->prefix . 'worker');
+                self::assertSame(1, $redis->publish($this->prefix . 'worker', 'before stop'));
+            },
+            $container,
+        );
 
         self::assertInstanceOf(Subscription::class, $subscription);
         self::assertSame([], iterator_to_array($subscription));
-        self::assertNull((new \ReflectionProperty($redis, 'stream'))->getValue($redis));
+        self::assertNull(new \ReflectionProperty($redis, 'stream')->getValue($redis));
         self::assertSame(0, $this->redis->publish($this->prefix . 'worker', 'after stop'));
     }
 
@@ -147,34 +154,54 @@ final class RedisProviderTest extends RedisTestCase
         stream_set_blocking($listener, false);
         $address = stream_socket_get_name($listener, false);
         $container = new Container();
-        $container->instance(ConfigContract::class, new Config(['redis' => ['url' => 'rediss://' . $address, 'timeout' => 10.0]]));
+        $container->instance(ConfigContract::class, new Config(['redis' => [
+            'url' => 'rediss://' . $address,
+            'timeout' => 10.0,
+        ]]));
         $socket = $peer = $worker = null;
         try {
-            WorkerHarness::run([new RedisProvider()], static function (Worker $running, ContainerContract $container) use ($listener, $address, &$socket, &$peer, &$worker): void {
-                $worker = $running;
-                $accepted = $worker->loop->getSuspension();
-                $worker->loop->onReadable($listener, static function (string $watcher) use ($listener, $worker, $accepted, &$peer): void {
-                    $peer = stream_socket_accept($listener, 0);
-                    $worker->loop->cancel($watcher);
-                    $accepted->resume();
-                });
-                $redis = $container->get(Client::class);
-                $worker->spawn(static function () use ($redis): void {
-                    try {
-                        $redis->subscribe('opening');
-                    } catch (RedisException) {
-                        // The opener will observe shutdown if the loop runs again.
-                    }
-                });
-                $accepted->suspend();
-                Async::sleep($worker->loop, 0.01);
-                foreach (get_resources('stream') as $candidate) {
-                    if (@stream_socket_get_name($candidate, true) === $address) {
+            WorkerHarness::run(
+                [new RedisProvider()],
+                static function (Worker $running, ContainerContract $container) use (
+                    $listener,
+                    $address,
+                    &$socket,
+                    &$peer,
+                    &$worker,
+                ): void {
+                    $worker = $running;
+                    $accepted = $worker->loop->getSuspension();
+                    $worker->loop->onReadable($listener, static function (string $watcher) use (
+                        $listener,
+                        $worker,
+                        $accepted,
+                        &$peer,
+                    ): void {
+                        $peer = stream_socket_accept($listener, 0);
+                        $worker->loop->cancel($watcher);
+                        $accepted->resume();
+                    });
+                    $redis = $container->get(Client::class);
+                    $worker->spawn(static function () use ($redis): void {
+                        try {
+                            $redis->subscribe('opening');
+                        } catch (RedisException) {
+                            // The opener will observe shutdown if the loop runs again.
+                        }
+                    });
+                    $accepted->suspend();
+                    Async::sleep($worker->loop, 0.01);
+                    foreach (get_resources('stream') as $candidate) {
+                        if (@stream_socket_get_name($candidate, true) !== $address) {
+                            continue;
+                        }
+
                         $socket = $candidate;
                     }
-                }
-                self::assertIsResource($socket);
-            }, $container);
+                    self::assertIsResource($socket);
+                },
+                $container,
+            );
 
             // Provider stop runs after the loop stops; do not await the opener here.
             self::assertFalse(is_resource($socket), 'Provider stop left its opening TLS socket alive.');
@@ -194,7 +221,7 @@ final class RedisProviderTest extends RedisTestCase
         $redis = $app->container->get(Client::class);
 
         self::assertSame(0.35, $app->config->get('redis.reply_timeout'));
-        self::assertSame(0.35, (new \ReflectionProperty($redis, 'replyTimeout'))->getValue($redis));
+        self::assertSame(0.35, new \ReflectionProperty($redis, 'replyTimeout')->getValue($redis));
     }
 
     public function testAConfiguredReplyTimeoutOfZeroIsRefused(): void
@@ -217,7 +244,7 @@ final class RedisProviderTest extends RedisTestCase
 
         $this->expectException(RedisException::class);
         $this->expectExceptionMessage('Redis at 127.0.0.1:1 could not be reached: the connection was refused');
-        (new EngineClient('redis://127.0.0.1:1'))->command('GET', 'x');
+        new EngineClient('redis://127.0.0.1:1')->command('GET', 'x');
     }
 
     /**
@@ -225,7 +252,12 @@ final class RedisProviderTest extends RedisTestCase
      */
     private function app(array $settings): App
     {
-        $app = new App(new Config($settings + ['redis' => ['url' => $this->url, 'prefix' => $this->prefix], 'log' => ['path' => $this->log]]));
+        $app = new App(
+            new Config(
+                $settings
+                + ['redis' => ['url' => $this->url, 'prefix' => $this->prefix], 'log' => ['path' => $this->log]],
+            ),
+        );
         $app->register(CacheProvider::class, QueueProvider::class, RedisProvider::class);
         return $app;
     }
@@ -236,9 +268,12 @@ final class RedisProviderTest extends RedisTestCase
     private function captured(): array
     {
         $stream = fopen('php://memory', 'w+');
-        return [new Output($stream, $stream), static function () use ($stream): string {
-            rewind($stream);
-            return (string) stream_get_contents($stream);
-        }];
+        return [
+            new Output($stream, $stream),
+            static function () use ($stream): string {
+                rewind($stream);
+                return (string) stream_get_contents($stream);
+            },
+        ];
     }
 }

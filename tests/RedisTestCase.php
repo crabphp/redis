@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace Crab\Redis\Tests;
 
-use Crab\Redis\EngineClient;
 use Crab\Redis\Client;
+use Crab\Redis\EngineClient;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -24,7 +24,9 @@ abstract class RedisTestCase extends TestCase
     {
         $url = getenv('CRAB_TEST_REDIS_URL');
         if (!is_string($url) || $url === '') {
-            self::markTestSkipped('Set CRAB_TEST_REDIS_URL, such as redis://127.0.0.1:6379, to run the tests that need Redis.');
+            self::markTestSkipped(
+                'Set CRAB_TEST_REDIS_URL, such as redis://127.0.0.1:6379, to run the tests that need Redis.',
+            );
         }
         $this->url = $url;
         $this->redis = new EngineClient($url);

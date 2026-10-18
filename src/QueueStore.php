@@ -167,13 +167,24 @@ final readonly class QueueStore implements Store
     /**
      * @param string $prefix Put before every key, to keep two applications apart on one server.
      */
-    public function __construct(private Client $redis, private string $prefix = 'crab:queue:')
-    {
-    }
+    public function __construct(
+        private Client $redis,
+        private string $prefix = 'crab:queue:',
+    ) {}
 
     public function push(string $queue, string $job, array $data, int $availableAt, int $now): int|string
     {
-        return (string) $this->redis->command('EVAL', self::PUSH, 0, $this->prefix, $queue, $job, json_encode($data, JSON_THROW_ON_ERROR), $availableAt, $now);
+        return (string) $this->redis->command(
+            'EVAL',
+            self::PUSH,
+            0,
+            $this->prefix,
+            $queue,
+            $job,
+            json_encode($data, JSON_THROW_ON_ERROR),
+            $availableAt,
+            $now,
+        );
     }
 
     public function reserve(array $queues, int $now, int $retryAfter): ?Message
@@ -183,7 +194,13 @@ final readonly class QueueStore implements Store
             return null;
         }
         [$id, $queue, $job, $data, $attempts] = $taken;
-        return new Message((string) $id, $queue, $job, json_decode($data, true, flags: JSON_THROW_ON_ERROR), (int) $attempts);
+        return new Message(
+            (string) $id,
+            $queue,
+            $job,
+            json_decode($data, true, flags: JSON_THROW_ON_ERROR),
+            (int) $attempts,
+        );
     }
 
     public function complete(Message $message): void
@@ -193,24 +210,60 @@ final readonly class QueueStore implements Store
 
     public function release(Message $message, int $availableAt): void
     {
-        $this->redis->command('EVAL', self::RELEASE, 0, $this->prefix, $message->queue, $message->id, $availableAt, $message->attempts);
+        $this->redis->command(
+            'EVAL',
+            self::RELEASE,
+            0,
+            $this->prefix,
+            $message->queue,
+            $message->id,
+            $availableAt,
+            $message->attempts,
+        );
     }
 
     public function fail(Message $message, string $error, int $now): void
     {
-        $this->redis->command('EVAL', self::FAIL, 0, $this->prefix, $message->queue, $message->id, $error, $now, $message->attempts);
+        $this->redis->command(
+            'EVAL',
+            self::FAIL,
+            0,
+            $this->prefix,
+            $message->queue,
+            $message->id,
+            $error,
+            $now,
+            $message->attempts,
+        );
     }
 
     public function failed(?int $latest = null): array
     {
         $failed = [];
         foreach ($this->failedIds($latest) as $id) {
-            $fields = $this->redis->command('HMGET', $this->prefix . 'job:' . $id, 'queue', 'job', 'data', 'attempts', 'error', 'failed_at');
+            $fields = $this->redis->command(
+                'HMGET',
+                $this->prefix . 'job:' . $id,
+                'queue',
+                'job',
+                'data',
+                'attempts',
+                'error',
+                'failed_at',
+            );
             if (!is_array($fields) || $fields[1] === null) {
                 continue;
             }
             [$queue, $job, $data, $attempts, $error, $failedAt] = $fields;
-            $failed[] = new Message((string) $id, $queue, $job, json_decode($data, true, flags: JSON_THROW_ON_ERROR), (int) $attempts, $error, $failedAt === null ? null : (int) $failedAt);
+            $failed[] = new Message(
+                (string) $id,
+                $queue,
+                $job,
+                json_decode($data, true, flags: JSON_THROW_ON_ERROR),
+                (int) $attempts,
+                $error,
+                $failedAt === null ? null : (int) $failedAt,
+            );
         }
         return $failed;
     }
@@ -235,9 +288,11 @@ final readonly class QueueStore implements Store
 
     public function size(string $queue): int
     {
-        return (int) $this->redis->command('LLEN', $this->prefix . 'ready:' . $queue)
+        return (
+            (int) $this->redis->command('LLEN', $this->prefix . 'ready:' . $queue)
             + (int) $this->redis->command('ZCARD', $this->prefix . 'delayed:' . $queue)
-            + (int) $this->redis->command('ZCARD', $this->prefix . 'reserved:' . $queue);
+            + (int) $this->redis->command('ZCARD', $this->prefix . 'reserved:' . $queue)
+        );
     }
 
     public function queues(): array
@@ -246,11 +301,26 @@ final readonly class QueueStore implements Store
         $names = [];
         $cursor = '0';
         do {
-            [$cursor, $keys] = $this->redis->command('SCAN', $cursor, 'MATCH', addcslashes($this->prefix, '*?[]\\') . '*:*', 'COUNT', 500);
+            [$cursor, $keys] = $this->redis->command(
+                'SCAN',
+                $cursor,
+                'MATCH',
+                addcslashes($this->prefix, '*?[]\\') . '*:*',
+                'COUNT',
+                500,
+            );
             foreach ($keys as $key) {
-                if (preg_match('/^(?:ready|delayed|reserved):(.+)$/', substr((string) $key, strlen($this->prefix)), $match) === 1) {
-                    $names[$match[1]] = true;
+                if (
+                    preg_match(
+                        '/^(?:ready|delayed|reserved):(.+)$/',
+                        substr((string) $key, strlen($this->prefix)),
+                        $match,
+                    ) !== 1
+                ) {
+                    continue;
                 }
+
+                $names[$match[1]] = true;
             }
         } while ((string) $cursor !== '0');
         foreach ($this->failed(200) as $message) {
@@ -268,18 +338,44 @@ final readonly class QueueStore implements Store
         // Each id with the time that matters in its state: when it was taken, or from when it may run.
         $found = [];
         if ($state === 'processing') {
-            $found = self::pairs((array) $this->redis->command('ZRANGE', $this->prefix . 'reserved:' . $queue, 0, $limit - 1, 'WITHSCORES'));
+            $found = self::pairs((array) $this->redis->command(
+                'ZRANGE',
+                $this->prefix . 'reserved:' . $queue,
+                0,
+                $limit - 1,
+                'WITHSCORES',
+            ));
         } elseif ($state === 'delayed') {
-            $found = self::pairs((array) $this->redis->command('ZRANGEBYSCORE', $this->prefix . 'delayed:' . $queue, '(' . $now, '+inf', 'WITHSCORES', 'LIMIT', 0, $limit));
+            $found = self::pairs((array) $this->redis->command(
+                'ZRANGEBYSCORE',
+                $this->prefix . 'delayed:' . $queue,
+                '(' . $now,
+                '+inf',
+                'WITHSCORES',
+                'LIMIT',
+                0,
+                $limit,
+            ));
         } elseif ($state === 'pending') {
             // Those whose time has come and that no worker has asked for since, then the ready list, as a worker would find them.
-            $found = self::pairs((array) $this->redis->command('ZRANGEBYSCORE', $this->prefix . 'delayed:' . $queue, '-inf', $now, 'WITHSCORES', 'LIMIT', 0, $limit));
+            $found = self::pairs((array) $this->redis->command(
+                'ZRANGEBYSCORE',
+                $this->prefix . 'delayed:' . $queue,
+                '-inf',
+                $now,
+                'WITHSCORES',
+                'LIMIT',
+                0,
+                $limit,
+            ));
             foreach ((array) $this->redis->command('LRANGE', $this->prefix . 'ready:' . $queue, 0, $limit - 1) as $id) {
                 $found[] = [(string) $id, null];
             }
             $found = array_slice($found, 0, $limit);
         } else {
-            throw new \InvalidArgumentException("\"{$state}\" is not a state a waiting job is in: pending, delayed or processing.");
+            throw new \InvalidArgumentException(
+                "\"{$state}\" is not a state a waiting job is in: pending, delayed or processing.",
+            );
         }
         $jobs = [];
         foreach ($found as [$id, $time]) {
@@ -288,9 +384,17 @@ final readonly class QueueStore implements Store
                 continue;
             }
             [$job, $data, $attempts, $at] = $fields;
+            $availableAt = $at === null ? null : (int) $at;
+            if ($state !== 'processing') {
+                $availableAt = $time ?? $availableAt;
+            }
             $jobs[] = new Message(
-                $id, $queue, $job, json_decode((string) $data, true, flags: JSON_THROW_ON_ERROR), (int) $attempts,
-                availableAt: $state === 'processing' ? ($at === null ? null : (int) $at) : ($time ?? ($at === null ? null : (int) $at)),
+                $id,
+                $queue,
+                $job,
+                json_decode((string) $data, true, flags: JSON_THROW_ON_ERROR),
+                (int) $attempts,
+                availableAt: $availableAt,
                 reservedAt: $state === 'processing' ? $time : null,
             );
         }
@@ -304,7 +408,7 @@ final readonly class QueueStore implements Store
     private static function pairs(array $flat): array
     {
         $pairs = [];
-        for ($index = 0; $index + 1 < count($flat); $index += 2) {
+        for ($index = 0; ($index + 1) < count($flat); $index += 2) {
             $pairs[] = [(string) $flat[$index], (int) $flat[$index + 1]];
         }
         return $pairs;
@@ -322,7 +426,18 @@ final readonly class QueueStore implements Store
             $at = $this->redis->command('HGET', $this->prefix . 'job:' . $head, 'at');
             $since[] = $at === null ? $now : (int) $at;
         }
-        $first = $due > 0 ? (array) $this->redis->command('ZRANGEBYSCORE', $this->prefix . 'delayed:' . $queue, '-inf', $now, 'WITHSCORES', 'LIMIT', 0, 1) : [];
+        $first = $due > 0
+            ? (array) $this->redis->command(
+                'ZRANGEBYSCORE',
+                $this->prefix . 'delayed:' . $queue,
+                '-inf',
+                $now,
+                'WITHSCORES',
+                'LIMIT',
+                0,
+                1,
+            )
+            : [];
         if (isset($first[1])) {
             $since[] = (int) $first[1];
         }
@@ -343,6 +458,9 @@ final readonly class QueueStore implements Store
         if ($latest !== null && $latest < 1) {
             return [];
         }
-        return array_map(strval(...), (array) $this->redis->command('ZRANGE', $this->prefix . 'failed', $latest === null ? 0 : -$latest, -1));
+        return array_map(
+            strval(...),
+            (array) $this->redis->command('ZRANGE', $this->prefix . 'failed', $latest === null ? 0 : -$latest, -1),
+        );
     }
 }

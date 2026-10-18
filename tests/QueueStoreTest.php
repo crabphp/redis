@@ -23,7 +23,11 @@ final class QueueStoreTest extends RedisTestCase
         $this->store->push('default', 'App\\SendEmail', ['userId' => 8], $now, $now);
         $this->store->push('high', 'App\\ResetPassword', ['userId' => 9], $now, $now);
 
-        self::assertSame([2, 1, 0], [$this->store->size('default'), $this->store->size('high'), $this->store->size('other')]);
+        self::assertSame([2, 1, 0], [
+            $this->store->size('default'),
+            $this->store->size('high'),
+            $this->store->size('other'),
+        ]);
         self::assertEqualsCanonicalizing(['default', 'high'], $this->store->queues());
 
         $taken = [];
@@ -34,11 +38,14 @@ final class QueueStoreTest extends RedisTestCase
             }
         }
 
-        self::assertSame([
-            ['high', 'App\\ResetPassword', ['userId' => 9], 1],
-            ['default', 'App\\SendEmail', ['userId' => 7, 'tags' => ['a', 'b']], 1],
-            ['default', 'App\\SendEmail', ['userId' => 8], 1],
-        ], $taken);
+        self::assertSame(
+            [
+                ['high', 'App\\ResetPassword', ['userId' => 9], 1],
+                ['default', 'App\\SendEmail', ['userId' => 7, 'tags' => ['a', 'b']], 1],
+                ['default', 'App\\SendEmail', ['userId' => 8], 1],
+            ],
+            $taken,
+        );
         // Taken and not yet done, they still count.
         self::assertSame(2, $this->store->size('default'));
     }
@@ -49,18 +56,30 @@ final class QueueStoreTest extends RedisTestCase
         $this->store->push('default', 'App\\Remind', [], $now + 600, $now);
 
         $this->store->push('default', 'App\\Now', [], $now, $now);
-        self::assertSame(['oldest' => $now, 'pending' => 1, 'delayed' => 1, 'processing' => 0], $this->store->counts('default', $now + 5));
+        self::assertSame(
+            ['oldest' => $now, 'pending' => 1, 'delayed' => 1, 'processing' => 0],
+            $this->store->counts('default', $now + 5),
+        );
         $first = $this->store->reserve(['default'], $now, 90);
-        self::assertSame(['oldest' => null, 'pending' => 0, 'delayed' => 1, 'processing' => 1], $this->store->counts('default', $now));
+        self::assertSame(
+            ['oldest' => null, 'pending' => 0, 'delayed' => 1, 'processing' => 1],
+            $this->store->counts('default', $now),
+        );
         // The same, job by job, to be looked at: nothing is taken by looking.
-        $listed = fn (string $state, int $at): array => array_map(static fn ($message): array => [$message->job, $message->availableAt, $message->reservedAt], $this->store->jobs('default', $state, $at));
+        $listed = fn(string $state, int $at): array => array_map(
+            static fn($message): array => [$message->job, $message->availableAt, $message->reservedAt],
+            $this->store->jobs('default', $state, $at),
+        );
         self::assertSame([['App\\Now', $now, $now]], $listed('processing', $now));
         self::assertSame([['App\\Remind', $now + 600, null]], $listed('delayed', $now));
         self::assertSame([], $listed('pending', $now));
         self::assertSame([['App\\Remind', $now + 600, null]], $listed('pending', $now + 700));
         self::assertSame([], $listed('delayed', $now + 700));
         // Its time come, the delayed one is pending since then, though no worker has asked yet.
-        self::assertSame(['oldest' => $now + 600, 'pending' => 1, 'delayed' => 0, 'processing' => 1], $this->store->counts('default', $now + 700));
+        self::assertSame(
+            ['oldest' => $now + 600, 'pending' => 1, 'delayed' => 0, 'processing' => 1],
+            $this->store->counts('default', $now + 700),
+        );
         $this->store->complete($first);
 
         self::assertNull($this->store->reserve(['default'], $now + 599, 90));
@@ -109,10 +128,22 @@ final class QueueStoreTest extends RedisTestCase
         }
 
         $failed = $this->store->failed();
-        self::assertSame([[1], [2], [3]], array_map(static fn ($message): array => array_values($message->data), $failed));
-        self::assertSame(['mail', 'App\\SendEmail', 1, 'refused 1', $now + 1], [$failed[0]->queue, $failed[0]->job, $failed[0]->attempts, $failed[0]->error, $failed[0]->failedAt]);
+        self::assertSame(
+            [[1], [2], [3]],
+            array_map(static fn($message): array => array_values($message->data), $failed),
+        );
+        self::assertSame(['mail', 'App\\SendEmail', 1, 'refused 1', $now + 1], [
+            $failed[0]->queue,
+            $failed[0]->job,
+            $failed[0]->attempts,
+            $failed[0]->error,
+            $failed[0]->failedAt,
+        ]);
         self::assertSame(0, $this->store->size('mail'));
-        self::assertSame([[2], [3]], array_map(static fn ($message): array => array_values($message->data), $this->store->failed(2)));
+        self::assertSame(
+            [[2], [3]],
+            array_map(static fn($message): array => array_values($message->data), $this->store->failed(2)),
+        );
         self::assertSame([], $this->store->failed(0));
 
         self::assertSame(0, $this->store->retry('no-such-id', $now));
@@ -134,7 +165,7 @@ final class QueueStoreTest extends RedisTestCase
     {
         $now = 1_000;
         $this->store->push('default', 'App\\Export', [], $now, $now);
-        $places = fn (): array => [
+        $places = fn(): array => [
             $this->redis->command('LLEN', $this->prefix . 'ready:default'),
             $this->redis->command('ZCARD', $this->prefix . 'delayed:default'),
             $this->redis->command('ZCARD', $this->prefix . 'reserved:default'),
@@ -179,14 +210,20 @@ final class QueueStoreTest extends RedisTestCase
         // The slow one wakes and reports a failure of its own try: the job is the other's now, and stays so.
         $this->store->release($slow, $now + 91);
         $this->store->fail($slow, 'too slow', $now + 91);
-        self::assertSame(['oldest' => null, 'pending' => 0, 'delayed' => 0, 'processing' => 1], $this->store->counts('default', $now + 100));
+        self::assertSame(
+            ['oldest' => null, 'pending' => 0, 'delayed' => 0, 'processing' => 1],
+            $this->store->counts('default', $now + 100),
+        );
         self::assertNull($this->store->reserve(['default'], $now + 100, 90));
         self::assertSame([], $this->store->failed());
 
         // The other puts it back to try later, and then the slow one finishes it after all: done is done.
         $this->store->release($next, $now + 200);
         $this->store->complete($slow);
-        self::assertSame(['oldest' => null, 'pending' => 0, 'delayed' => 0, 'processing' => 0], $this->store->counts('default', $now + 300));
+        self::assertSame(
+            ['oldest' => null, 'pending' => 0, 'delayed' => 0, 'processing' => 0],
+            $this->store->counts('default', $now + 300),
+        );
         self::assertNull($this->store->reserve(['default'], $now + 300, 90));
         self::assertSame([], $this->redis->command('KEYS', $this->prefix . 'job:*'));
     }

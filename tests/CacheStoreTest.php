@@ -39,16 +39,16 @@ final class CacheStoreTest extends RedisTestCase
             $tasks[] = \Crab\Engine\Async\Task::spawn($loop, function (): ?string {
                 $client = new \Crab\Redis\EngineClient($this->url, replyTimeout: 2);
                 try {
-                    return (new CacheStore($client, $this->prefix))->take('once', 100);
+                    return new CacheStore($client, $this->prefix)->take('once', 100);
                 } finally {
                     $client->close();
                 }
             });
         }
-        $values = array_map(static fn ($task): ?string => $task->await(), $tasks);
+        $values = array_map(static fn($task): ?string => $task->await(), $tasks);
         $loop->run();
-        self::assertSame(1, count(array_filter($values, static fn ($value): bool => $value === 'winner')));
-        self::assertSame(1, count(array_filter($values, static fn ($value): bool => $value === null)));
+        self::assertSame(1, count(array_filter($values, static fn($value): bool => $value === 'winner')));
+        self::assertSame(1, count(array_filter($values, static fn($value): bool => $value === null)));
     }
 
     public function testALockCanBeTakenByOneHolderAndTakenAgainAfterRelease(): void

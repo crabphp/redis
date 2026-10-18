@@ -12,7 +12,7 @@ namespace Crab\Redis;
  */
 final readonly class RedisError
 {
-    public function __construct(public string $message)
-    {
-    }
+    public function __construct(
+        public string $message,
+    ) {}
 }

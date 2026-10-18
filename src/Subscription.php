@@ -91,7 +91,11 @@ final class Subscription implements \IteratorAggregate
         if ($bufferCapacity < 1) {
             throw new \InvalidArgumentException('Set bufferCapacity to at least one message.');
         }
-        foreach (['replyTimeout' => $replyTimeout, 'idleInterval' => $idleInterval, 'pingTimeout' => $pingTimeout] as $name => $seconds) {
+        foreach ([
+            'replyTimeout' => $replyTimeout,
+            'idleInterval' => $idleInterval,
+            'pingTimeout' => $pingTimeout,
+        ] as $name => $seconds) {
             if ($seconds <= 0 || !is_finite($seconds)) {
                 throw new \InvalidArgumentException("Set {$name} to a positive, finite number of seconds.");
             }
@@ -176,7 +180,9 @@ final class Subscription implements \IteratorAggregate
             throw $this->failure;
         }
         if ($this->consuming) {
-            throw new \LogicException('This Redis subscription already has a consumer. Finish its iterator before starting another, or create a separate subscription.');
+            throw new \LogicException(
+                'This Redis subscription already has a consumer. Finish its iterator before starting another, or create a separate subscription.',
+            );
         }
         if ($this->closed) {
             return;
@@ -232,7 +238,9 @@ final class Subscription implements \IteratorAggregate
             $this->loop->cancel($this->reconnectTimer);
             $this->reconnectTimer = null;
         }
-        $error = $this->failure ?? new RedisException('The Redis subscription is closed. Create a new subscription to change channels.');
+        $error = $this->failure ?? new RedisException(
+            'The Redis subscription is closed. Create a new subscription to change channels.',
+        );
         $this->drop($error);
         $waiting = $this->changing ?? [];
         $this->changing = null;
@@ -251,14 +259,16 @@ final class Subscription implements \IteratorAggregate
         while (!$this->messages->isEmpty()) {
             $this->messages->dequeue();
         }
-        ($this->onClose)?->__invoke($this);
+        $this->onClose?->__invoke($this);
     }
 
     private function useLoop(): void
     {
         $loop = EventLoop::current();
         if ($this->loop !== null && $this->loop !== $loop) {
-            throw new \LogicException('This Redis subscription belongs to another event loop. Create it in the worker that consumes it.');
+            throw new \LogicException(
+                'This Redis subscription belongs to another event loop. Create it in the worker that consumes it.',
+            );
         }
         $this->loop = $loop;
     }
@@ -284,7 +294,9 @@ final class Subscription implements \IteratorAggregate
                 throw $this->failure;
             }
             if ($this->closed) {
-                throw new RedisException('The Redis subscription is closed. Create a new subscription to change channels.');
+                throw new RedisException(
+                    'The Redis subscription is closed. Create a new subscription to change channels.',
+                );
             }
             $operation();
         } finally {
@@ -317,7 +329,9 @@ final class Subscription implements \IteratorAggregate
                 throw $this->failure;
             }
             if (!is_resource($this->stream) || $this->closed) {
-                throw new RedisException('Redis lost the connection before the subscription was ready. Check server availability and try again.');
+                throw new RedisException(
+                    'Redis lost the connection before the subscription was ready. Check server availability and try again.',
+                );
             }
             $this->connected = $this->everConnected = true;
             $this->outage = false;
@@ -329,7 +343,10 @@ final class Subscription implements \IteratorAggregate
             $this->watchIdle();
         } catch (CancelledException $error) {
             $this->drop();
-            throw new RedisException('The Redis subscription was closed while connecting. Create a new subscription to try again.', previous: $error);
+            throw new RedisException(
+                'The Redis subscription was closed while connecting. Create a new subscription to try again.',
+                previous: $error,
+            );
         } catch (RedisException $error) {
             $this->drop($error);
             if ($this->everConnected && !$this->closed) {
@@ -411,7 +428,7 @@ final class Subscription implements \IteratorAggregate
     private function read(): void
     {
         $bytes = @fread($this->stream, 65_536);
-        if ($bytes === false || ($bytes === '' && feof($this->stream))) {
+        if ($bytes === false || $bytes === '' && feof($this->stream)) {
             $this->lost('Redis closed the subscription connection. Check server availability.');
             return;
         }
@@ -430,21 +447,35 @@ final class Subscription implements \IteratorAggregate
                     $this->refused($name);
                     return;
                 }
-                if (is_array($reply) && ($reply[0] ?? null) === 'message' && count($reply) === 3 && is_string($reply[1]) && is_string($reply[2])) {
+                if (
+                    is_array($reply)
+                    && ($reply[0] ?? null) === 'message'
+                    && count($reply) === 3
+                    && is_string($reply[1])
+                    && is_string($reply[2])
+                ) {
                     $this->deliver($reply[1], $reply[2]);
-                } elseif ($reply === 'PONG' || (is_array($reply) && ($reply[0] ?? null) === 'pong')) {
+                } elseif ($reply === 'PONG' || is_array($reply) && ($reply[0] ?? null) === 'pong') {
                     if ($this->pingTimer !== null) {
                         $this->loop->cancel($this->pingTimer);
                         $this->pingTimer = null;
                     }
                 } elseif ($this->pending !== null) {
                     if ($this->pending['acknowledgements'] !== []) {
-                        if (!is_array($reply) || ($reply[0] ?? null) !== strtolower($this->pending['name']) || !is_string($reply[1] ?? null)) {
-                            throw new RedisException('Redis sent an unexpected subscription reply. Check the server protocol; this client uses RESP2.');
+                        if (
+                            !is_array($reply)
+                            || ($reply[0] ?? null) !== strtolower($this->pending['name'])
+                            || !is_string($reply[1] ?? null)
+                        ) {
+                            throw new RedisException(
+                                'Redis sent an unexpected subscription reply. Check the server protocol; this client uses RESP2.',
+                            );
                         }
                         unset($this->pending['acknowledgements'][':' . $reply[1]]);
                     } elseif ($reply !== 'OK') {
-                        throw new RedisException('Redis did not confirm subscription setup. Check credentials and database settings.');
+                        throw new RedisException(
+                            'Redis did not confirm subscription setup. Check credentials and database settings.',
+                        );
                     }
                     if ($this->pending['acknowledgements'] === []) {
                         $pending = $this->pending;
@@ -455,7 +486,9 @@ final class Subscription implements \IteratorAggregate
                         $pending['suspension']->resume();
                     }
                 } else {
-                    throw new RedisException('Redis sent an unexpected subscription reply. Check the server protocol; this client uses RESP2.');
+                    throw new RedisException(
+                        'Redis sent an unexpected subscription reply. Check the server protocol; this client uses RESP2.',
+                    );
                 }
             }
         } catch (RedisException $error) {
@@ -508,7 +541,14 @@ final class Subscription implements \IteratorAggregate
         if ($this->closed) {
             return;
         }
-        $error = new RedisException($why . ($this->everConnected ? ' Publications during this gap may be lost; resynchronise application state.' : ''));
+        $error = new RedisException(
+            $why
+            . (
+                $this->everConnected
+                    ? ' Publications during this gap may be lost; resynchronise application state.'
+                    : ''
+            ),
+        );
         $this->dropCount += $this->messages->count();
         while (!$this->messages->isEmpty()) {
             $this->messages->dequeue();
@@ -520,7 +560,10 @@ final class Subscription implements \IteratorAggregate
         if (!$this->outage) {
             $this->outage = true;
             ++$this->gapCount;
-            FailureReporter::report('Redis subscription lost messages during a connection gap; resynchronise application state. Reconnecting to its current channels', $error);
+            FailureReporter::report(
+                'Redis subscription lost messages during a connection gap; resynchronise application state. Reconnecting to its current channels',
+                $error,
+            );
         }
         $this->reconnect();
     }
@@ -531,7 +574,9 @@ final class Subscription implements \IteratorAggregate
      */
     private function refused(string $command): void
     {
-        $this->failure = new RedisException("Redis refused subscription {$command}: credentials, database or channel permissions were refused. Check credentials and database, then create a new client with updated settings and subscribe again.");
+        $this->failure = new RedisException(
+            "Redis refused subscription {$command}: credentials, database or channel permissions were refused. Check credentials and database, then create a new client with updated settings and subscribe again.",
+        );
         $this->close();
         if ($this->everConnected) {
             FailureReporter::report('Redis subscription cannot reconnect with its current settings', $this->failure);
@@ -567,12 +612,14 @@ final class Subscription implements \IteratorAggregate
     private function reference(): void
     {
         foreach ([$this->reader, $this->reconnectTimer] as $watcher) {
-            if ($watcher !== null) {
-                if ($this->consumer !== null || $this->pending !== null) {
-                    $this->loop->reference($watcher);
-                } else {
-                    $this->loop->unreference($watcher);
-                }
+            if ($watcher === null) {
+                continue;
+            }
+
+            if ($this->consumer !== null || $this->pending !== null) {
+                $this->loop->reference($watcher);
+            } else {
+                $this->loop->unreference($watcher);
             }
         }
     }
@@ -580,9 +627,11 @@ final class Subscription implements \IteratorAggregate
     private function drop(?RedisException $error = null): void
     {
         foreach ([$this->reader, $this->writer, $this->idleTimer, $this->pingTimer, $this->replyTimer] as $watcher) {
-            if ($watcher !== null) {
-                $this->loop->cancel($watcher);
+            if ($watcher === null) {
+                continue;
             }
+
+            $this->loop->cancel($watcher);
         }
         if (is_resource($this->stream)) {
             fclose($this->stream);
@@ -593,7 +642,11 @@ final class Subscription implements \IteratorAggregate
         $pending = $this->pending;
         $this->pending = null;
         if ($pending !== null) {
-            $pending['suspension']->throw($error ?? new RedisException('The Redis subscription connection was closed. Create a new subscription to try again.'));
+            $pending['suspension']->throw(
+                $error ?? new RedisException(
+                    'The Redis subscription connection was closed. Create a new subscription to try again.',
+                ),
+            );
         }
     }
 }

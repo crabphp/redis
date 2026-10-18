@@ -4,13 +4,13 @@ declare(strict_types=1);
 
 namespace Crab\Redis;
 
-use Crab\Contracts\Cache\Store as CacheStoreContract;
 use Crab\Contracts\Broadcast\Carrier;
+use Crab\Contracts\Cache\Store as CacheStoreContract;
 use Crab\Contracts\Config\Config;
 use Crab\Contracts\Container\Container;
+use Crab\Contracts\Queue\Store as QueueStoreContract;
 use Crab\Contracts\WorkerProvider;
 use Crab\Engine\Process\Worker;
-use Crab\Contracts\Queue\Store as QueueStoreContract;
 
 /**
  * Binds a Redis client from the "redis" configuration section, and
@@ -43,29 +43,41 @@ final class RedisProvider implements WorkerProvider
             'reply_timeout' => 5.0,
             'tls' => [],
         ]);
-        $container->singleton(Client::class, static fn (Container $container): Client => new EngineClient(
-            (string) $container->get(Config::class)->get('redis.url'),
-            (float) $container->get(Config::class)->get('redis.timeout'),
-            (array) $container->get(Config::class)->get('redis.tls'),
-            replyTimeout: (float) $container->get(Config::class)->get('redis.reply_timeout'),
-        ));
+        $container->singleton(
+            Client::class,
+            static fn(Container $container): Client => new EngineClient(
+                (string) $container->get(Config::class)->get('redis.url'),
+                (float) $container->get(Config::class)->get('redis.timeout'),
+                (array) $container->get(Config::class)->get('redis.tls'),
+                replyTimeout: (float) $container->get(Config::class)->get('redis.reply_timeout'),
+            ),
+        );
         if ($config->get('cache.store') === 'redis') {
-            $container->singleton(CacheStoreContract::class, static fn (Container $container): CacheStore => new CacheStore(
-                $container->get(Client::class),
-                $container->get(Config::class)->get('redis.prefix') . 'cache:',
-            ));
+            $container->singleton(
+                CacheStoreContract::class,
+                static fn(Container $container): CacheStore => new CacheStore(
+                    $container->get(Client::class),
+                    $container->get(Config::class)->get('redis.prefix') . 'cache:',
+                ),
+            );
         }
         if ($config->get('queue.store') === 'redis') {
-            $container->singleton(QueueStoreContract::class, static fn (Container $container): QueueStore => new QueueStore(
-                $container->get(Client::class),
-                $container->get(Config::class)->get('redis.prefix') . 'queue:',
-            ));
+            $container->singleton(
+                QueueStoreContract::class,
+                static fn(Container $container): QueueStore => new QueueStore(
+                    $container->get(Client::class),
+                    $container->get(Config::class)->get('redis.prefix') . 'queue:',
+                ),
+            );
         }
         if ($config->get('broadcast.carrier') === 'redis') {
-            $container->singleton(Carrier::class, static fn (Container $container): BroadcastCarrier => new BroadcastCarrier(
-                $container->get(Client::class),
-                (string) $container->get(Config::class)->get('broadcast.prefix'),
-            ));
+            $container->singleton(
+                Carrier::class,
+                static fn(Container $container): BroadcastCarrier => new BroadcastCarrier(
+                    $container->get(Client::class),
+                    (string) $container->get(Config::class)->get('broadcast.prefix'),
+                ),
+            );
         }
     }
 

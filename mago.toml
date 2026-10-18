@@ -1,0 +1,75 @@
+#:schema https://mago.carthage.software/1.57.0/schema.json
+version = "1"
+php-version = "8.4.0"
+
+[source]
+workspace = "."
+paths = ["src/", "tests/"]
+includes = ["vendor"]
+excludes = ["vendor/**", "storage/**", "benchmarks/results/**"]
+
+[source.glob]
+literal-separator = true
+
+[formatter]
+print-width = 120
+
+[linter]
+integrations = ["phpunit"]
+
+[linter.rules]
+# AGENTS.md requires naming values before use; finally blocks may observe the returned local.
+inline-variable-return = { enabled = false }
+# Switching thousands of self:: assertions to late static binding is a broad behavioral rewrite.
+assertion-style = { enabled = false }
+# Naming every positional literal would couple existing callers to parameter names across public APIs.
+literal-named-argument = { enabled = false }
+# Splitting established protocol parsers and lifecycle code is beyond a formatting change.
+cyclomatic-complexity = { enabled = false }
+# Reducing aggregate metrics would require broad rewrites of tested parsers and fixtures.
+halstead = { enabled = false }
+# Metric-driven extraction would restructure established state machines and tests.
+kan-defect = { enabled = false }
+# Public contracts and cohesive test fixtures cannot be split safely for a method-count limit.
+too-many-methods = { enabled = false }
+# Protocol and worker state needs coordinated ownership; splitting it requires a design change.
+too-many-properties = { enabled = false }
+# Existing public and PSR-compatible signatures must remain compatible.
+excessive-parameter-list = { enabled = false }
+# Flattening bounded parser and cleanup paths needs a separate behavioral review.
+excessive-nesting = { enabled = false }
+# Existing public options and interface signatures must remain compatible.
+no-boolean-flag-parameter = { enabled = false }
+# AGENTS.md explicitly permits checked @ calls because worker warnings become exceptions.
+no-error-control-operator = { enabled = false }
+# AGENTS.md favors plain top-to-bottom statements; rewriting every branch adds unnecessary churn.
+no-else-clause = { enabled = false }
+# Existing null-aware array and property checks must keep their semantics without a broad rewrite.
+no-isset = { enabled = false }
+# Local test fixtures and benchmark helpers belong with their scenarios; splitting them is broad churn.
+single-class-per-file = { enabled = false }
+# Replacing forwarding closures can change binding time and captured mutable state.
+prefer-first-class-callable = { enabled = false }
+# Keep explicit closure statements and reference captures as required by AGENTS.md readability.
+prefer-arrow-function = { enabled = false }
+# Expected cancellation, validation and best-effort cleanup are already handled or documented at the caller.
+no-empty-catch-clause = { enabled = false }
+# Existing truthiness fallbacks must preserve evaluation count and falsy-value behavior.
+no-shorthand-ternary = { enabled = false }
+# Splitting shared state resets and fixture registration across many files needs separate lifecycle review.
+no-multi-assignments = { enabled = false }
+# Protocol token patterns, redaction key names and deliberate test credentials are not embedded secrets.
+no-literal-password = { enabled = false }
+# Cleanup loops stay inside finally, and migration lock failure is thrown only without an earlier failure.
+no-unsafe-finally = { enabled = false }
+# Query::sum uses + 0 to convert numeric database strings while preserving int or float results.
+no-redundant-math = { enabled = false }
+# Process fixtures deliberately share process state; changing that setup would alter lifecycle tests.
+no-global = { enabled = false }
+# The standalone broadcast benchmark owns its local probe; renaming its entry point breaks usage.
+file-name = { enabled = false }
+# The subscription test deliberately breaks after one message to exercise iterator cancellation.
+loop-does-not-iterate = { enabled = false }
+
+# Empty loops consume frames, drain streams and keep subscriptions alive through condition or iterator side effects.
+no-empty-loop = { enabled = false }

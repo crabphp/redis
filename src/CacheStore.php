@@ -107,10 +107,14 @@ final readonly class CacheStore implements Store
     /**
      * @param string $prefix Put before every key. clear() removes the keys that start with it and no others, so it may not be empty.
      */
-    public function __construct(private Client $redis, private string $prefix = 'crab:cache:')
-    {
+    public function __construct(
+        private Client $redis,
+        private string $prefix = 'crab:cache:',
+    ) {
         if ($prefix === '') {
-            throw new \InvalidArgumentException('The Redis cache needs a prefix for its keys, so that clearing the cache removes its own entries and nothing else.');
+            throw new \InvalidArgumentException(
+                'The Redis cache needs a prefix for its keys, so that clearing the cache removes its own entries and nothing else.',
+            );
         }
     }
 
@@ -130,20 +134,28 @@ final readonly class CacheStore implements Store
             $this->redis->command('SET', $this->prefix . $key, self::NEVER . ':' . $value);
             return;
         }
-        $this->redis->command('SET', $this->prefix . $key, $expiresAt . ':' . $value, 'EXAT', self::droppedAt($expiresAt));
+        $this->redis->command(
+            'SET',
+            $this->prefix . $key,
+            $expiresAt . ':' . $value,
+            'EXAT',
+            self::droppedAt($expiresAt),
+        );
     }
 
     public function add(string $key, string $value, ?int $expiresAt, int $now): bool
     {
-        return $this->redis->command(
-            'EVAL',
-            self::ADD,
-            1,
-            $this->prefix . $key,
-            ($expiresAt ?? self::NEVER) . ':' . $value,
-            $expiresAt === null ? 0 : self::droppedAt($expiresAt),
-            $now,
-        ) === 1;
+        return (
+            $this->redis->command(
+                'EVAL',
+                self::ADD,
+                1,
+                $this->prefix . $key,
+                ($expiresAt ?? self::NEVER) . ':' . $value,
+                $expiresAt === null ? 0 : self::droppedAt($expiresAt),
+                $now,
+            ) === 1
+        );
     }
 
     public function increment(string $key, int $by, ?int $expiresAt, int $now): int
@@ -188,7 +200,14 @@ final readonly class CacheStore implements Store
     {
         $cursor = '0';
         do {
-            [$cursor, $keys] = $this->redis->command('SCAN', $cursor, 'MATCH', self::escape($this->prefix) . '*', 'COUNT', 500);
+            [$cursor, $keys] = $this->redis->command(
+                'SCAN',
+                $cursor,
+                'MATCH',
+                self::escape($this->prefix) . '*',
+                'COUNT',
+                500,
+            );
             if ($keys !== []) {
                 $this->redis->command('UNLINK', ...$keys);
             }

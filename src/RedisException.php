@@ -7,6 +7,4 @@ namespace Crab\Redis;
 /**
  * Redis could not be reached, or refused a command.
  */
-final class RedisException extends \RuntimeException
-{
-}
+final class RedisException extends \RuntimeException {}

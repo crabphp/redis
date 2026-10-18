@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=5s --health-timeout=5s --health-retries=30
+    env:
+      CRAB_TEST_REDIS_URL: redis://127.0.0.1:6379
+    defaults:
+      run:
+        working-directory: redis
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: redis
+      # composer.json reads crabphp/framework from ../framework until there is a release.
+      - uses: actions/checkout@v4
+        with:
+          repository: crabphp/framework
+          path: framework
+          # Needed only while the crabphp repositories are private.
+          token: ${{ secrets.CRAB_REPOS_TOKEN || github.token }}
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: mbstring, pcntl, posix, sockets, pdo_sqlite
+          coverage: none
+      - run: composer install --no-interaction --no-progress
+      - run: composer format:check
+      - run: composer lint
+      - run: vendor/bin/phpunit

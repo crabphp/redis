@@ -32,9 +32,10 @@ final class BroadcastCarrier implements Carrier
     private int $dropped = 0;
     private bool $closed = false;
 
-    public function __construct(private readonly Client $client, private readonly string $prefix = 'crab:broadcast:')
-    {
-    }
+    public function __construct(
+        private readonly Client $client,
+        private readonly string $prefix = 'crab:broadcast:',
+    ) {}
 
     public function publish(array $channels, string $message): void
     {
@@ -67,7 +68,7 @@ final class BroadcastCarrier implements Carrier
                     $subscription->close();
                     return;
                 }
-                $this->consumer = $this->loop->defer(fn () => $this->consume($subscription));
+                $this->consumer = $this->loop->defer(fn() => $this->consume($subscription));
                 // Subscription reports outages even when no message arrives.
                 $this->monitor = $this->loop->repeat(0.05, $this->checkGap(...));
             } else {
@@ -96,7 +97,7 @@ final class BroadcastCarrier implements Carrier
         if ($this->closed) {
             return;
         }
-        $task = $this->change(fn () => $this->subscription?->remove($wire));
+        $task = $this->change(fn() => $this->subscription?->remove($wire));
         $task->onComplete(function (Task $done): void {
             try {
                 $done->result();
@@ -159,7 +160,10 @@ final class BroadcastCarrier implements Carrier
                 // Subscription already reports its transport gaps and
                 // terminal Redis refusals; delivery callback failures do not.
                 if (!$error instanceof RedisException) {
-                    FailureReporter::report('Redis broadcast delivery ended; reconnect clients and check Redis settings', $error);
+                    FailureReporter::report(
+                        'Redis broadcast delivery ended; reconnect clients and check Redis settings',
+                        $error,
+                    );
                 }
             }
         }

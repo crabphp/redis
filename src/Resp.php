@@ -51,7 +51,7 @@ final class Resp
         if ($type === '$') {
             $length = (int) $line;
             if ($length >= 0) {
-                if (strlen($bytes) < $next + $length + 2) {
+                if (strlen($bytes) < ($next + $length + 2)) {
                     return null;
                 }
                 $offset = $next + $length + 2;
@@ -74,7 +74,11 @@ final class Resp
                 '+' => $line,
                 ':' => (int) $line,
                 '-' => new RedisError($line),
-                default => throw new RedisException('Redis sent a reply that cannot be read; it starts with "' . addcslashes($type, "\0..\37\177..\377") . '".'),
+                default => throw new RedisException(
+                    'Redis sent a reply that cannot be read; it starts with "'
+                    . addcslashes($type, "\0..\37\177..\377")
+                    . '".',
+                ),
             };
         }
         $offset = $next;
