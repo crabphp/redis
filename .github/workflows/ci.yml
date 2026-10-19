@@ -38,12 +38,13 @@ jobs:
         with:
           repository: crabphp/framework
           path: framework
-          # Needed only while the crabphp repositories are private.
       - uses: shivammathur/setup-php@v2
         with:
           php-version: '8.4'
           extensions: mbstring, pcntl, posix, sockets, pdo_sqlite
           coverage: none
+      # Two subscription tests start and stop a Redis of their own.
+      - run: sudo apt-get install -y --no-install-recommends redis-server
       - run: composer install --no-interaction --no-progress
       - run: composer format:check
       - run: composer lint
