@@ -39,7 +39,6 @@ jobs:
           repository: crabphp/framework
           path: framework
           # Needed only while the crabphp repositories are private.
-          token: ${{ secrets.CRAB_REPOS_TOKEN || github.token }}
       - uses: shivammathur/setup-php@v2
         with:
           php-version: '8.4'
