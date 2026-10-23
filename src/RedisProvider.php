@@ -36,22 +36,44 @@ final class RedisProvider implements WorkerProvider
     public function register(Container $container): void
     {
         $config = $container->get(Config::class);
-        $config->defaults('redis', [
-            'url' => 'redis://127.0.0.1:6379',
-            'prefix' => 'crab:',
-            'timeout' => 2.0,
-            'reply_timeout' => 5.0,
-            'tls' => [],
-        ]);
-        $container->singleton(
-            Client::class,
-            static fn(Container $container): Client => new EngineClient(
-                (string) $container->get(Config::class)->get('redis.url'),
-                (float) $container->get(Config::class)->get('redis.timeout'),
-                (array) $container->get(Config::class)->get('redis.tls'),
-                replyTimeout: (float) $container->get(Config::class)->get('redis.reply_timeout'),
-            ),
+        $config->defaults(
+            'redis',
+            [
+                'url' => 'redis://127.0.0.1:6379',
+                'prefix' => 'crab:',
+                'timeout' => 2.0,
+                'reply_timeout' => 5.0,
+                'tls' => [],
+            ],
+            [
+                'url' => ['type' => 'string', 'pattern' => '^rediss?://', 'examples' => ['redis://127.0.0.1:6379']],
+                'prefix' => ['type' => 'string'],
+                'timeout' => ['type' => 'number', 'exclusiveMinimum' => 0],
+                'reply_timeout' => ['type' => 'number', 'exclusiveMinimum' => 0],
+                'tls' => ['type' => 'object'],
+            ],
         );
+        // "redis" becomes one of the choices, where the provider it is a choice of is registered.
+        foreach ([
+            'cache' => ['store', CacheStoreContract::class],
+            'queue' => ['store', QueueStoreContract::class],
+            'broadcast' => ['carrier', Carrier::class],
+        ] as $section => [$key, $contract]) {
+            if (!$container->has($contract)) {
+                continue;
+            }
+            $config->defaults($section, [], [$key => ['enum' => ['redis']]]);
+        }
+        $container->singleton(Client::class, static function (Container $container): Client {
+            $config = $container->get(Config::class);
+            $config->check('redis');
+            return new EngineClient(
+                (string) $config->get('redis.url'),
+                (float) $config->get('redis.timeout'),
+                (array) $config->get('redis.tls'),
+                replyTimeout: (float) $config->get('redis.reply_timeout'),
+            );
+        });
         if ($config->get('cache.store') === 'redis') {
             $container->singleton(
                 CacheStoreContract::class,

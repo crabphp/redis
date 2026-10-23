@@ -229,7 +229,7 @@ final class RedisProviderTest extends RedisTestCase
         $app = $this->app(['redis' => ['url' => $this->url, 'reply_timeout' => 0]]);
 
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('Set replyTimeout to a positive, finite number');
+        $this->expectExceptionMessage('redis.reply_timeout is 0; it takes a number greater than 0.');
         $app->container->get(Client::class);
     }
 
