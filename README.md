@@ -57,7 +57,7 @@ return [
 | `redis.reply_timeout` | `5.0` | Positive seconds to wait for a reply after writing a command, in addition to its explicit blocking timeout |
 | `redis.tls` | none | PHP's `ssl` context options for a `rediss://` address, such as `['cafile' => '/etc/ssl/redis-ca.pem']` |
 
-The cache's keys start with the prefix and `cache:`, the queue's with the prefix and `queue:`. `cache:clear` removes the cache's keys and nothing else on the server.
+The cache's keys start with the prefix and `cache:`, the queue's with the prefix and `queue:`. `cache:clear` removes the cache's values and nothing else on the server; its locks stay unless you add `--locks`.
 
 Set `reply_timeout` when a stalled Redis connection should fail sooner, or when your commands need longer to answer. With no provider, pass it as `new EngineClient($url, replyTimeout: 0.5)`.
 

@@ -77,6 +77,24 @@ final readonly class CacheStore implements Store
         LUA;
 
     /**
+     * Gives a live entry holding exactly the value a new expiry.
+     * KEYS: the entry. ARGV: the value, the new expiry, when Redis drops
+     * it, and the time now.
+     */
+    private const EXTEND_IF = <<<'LUA'
+        local current = redis.call('GET', KEYS[1])
+        if not current then
+            return 0
+        end
+        local at, value = string.match(current, '^([^:]+):(.*)$')
+        if value == ARGV[1] and (at == 'n' or tonumber(at) > tonumber(ARGV[4])) then
+            redis.call('SET', KEYS[1], ARGV[2] .. ':' .. value, 'EXAT', ARGV[3])
+            return 1
+        end
+        return 0
+        LUA;
+
+    /**
      * Adds to the whole number at an entry, which is kept as "i:5;". One
      * that is absent, expired or not such a number counts from zero.
      * KEYS: the entry. ARGV: how much to add, when a new count expires
@@ -188,6 +206,22 @@ final readonly class CacheStore implements Store
         return $this->redis->command('EVAL', self::DELETE_IF, 1, $this->prefix . $key, $value, $now) === 1;
     }
 
+    public function extendIf(string $key, string $value, int $expiresAt, int $now): bool
+    {
+        return (
+            $this->redis->command(
+                'EVAL',
+                self::EXTEND_IF,
+                1,
+                $this->prefix . $key,
+                $value,
+                $expiresAt,
+                self::droppedAt($expiresAt),
+                $now,
+            ) === 1
+        );
+    }
+
     /**
      * Redis drops expired entries itself, so there is nothing to prune.
      */
@@ -196,7 +230,7 @@ final readonly class CacheStore implements Store
         return 0;
     }
 
-    public function clear(): void
+    public function clear(string $prefix = ''): void
     {
         $cursor = '0';
         do {
@@ -204,7 +238,7 @@ final readonly class CacheStore implements Store
                 'SCAN',
                 $cursor,
                 'MATCH',
-                self::escape($this->prefix) . '*',
+                self::escape($this->prefix . $prefix) . '*',
                 'COUNT',
                 500,
             );

@@ -102,16 +102,16 @@ final class CacheStoreTest extends RedisTestCase
         $now = $clock->now()->getTimestamp();
 
         self::assertFalse($store->deleteIf('missing', serialize('token'), $now));
-        self::assertFalse($store->deleteIf('owned', serialize("Token:\0\n"), $now));
+        self::assertFalse($store->deleteIf('value:owned', serialize("Token:\0\n"), $now));
         self::assertSame("token:\0\n", $cache->get('owned'));
         $clock->advance('+1 second');
         $now = $clock->now()->getTimestamp();
-        self::assertFalse($store->deleteIf('expired', serialize('old'), $now));
+        self::assertFalse($store->deleteIf('value:expired', serialize('old'), $now));
         self::assertNull($cache->get('expired'));
-        self::assertTrue($store->deleteIf('owned', serialize("token:\0\n"), $now));
+        self::assertTrue($store->deleteIf('value:owned', serialize("token:\0\n"), $now));
         self::assertNull($cache->get('owned'));
-        self::assertFalse($store->deleteIf('owned', serialize("token:\0\n"), $now));
-        self::assertTrue($store->deleteIf('forever', serialize('kept'), $now));
+        self::assertFalse($store->deleteIf('value:owned', serialize("token:\0\n"), $now));
+        self::assertTrue($store->deleteIf('value:forever', serialize('kept'), $now));
         self::assertNull($cache->get('forever'));
         $store->set('empty', '', null);
         self::assertTrue($store->deleteIf('empty', '', $now));
@@ -189,6 +189,29 @@ final class CacheStoreTest extends RedisTestCase
         new CacheStore($this->redis, '');
     }
 
+    public function testExtendIfMovesOnlyALiveEntryHoldingTheValueAndClearTakesAPrefix(): void
+    {
+        $store = new CacheStore($this->redis, $this->prefix);
+        $now = time();
+        $store->set('lock:job', 'token', $now + 5);
+        $store->set('lock:gone', 'token', $now - 1);
+
+        self::assertFalse($store->extendIf('lock:job', 'other', $now + 60, $now));
+        self::assertFalse($store->extendIf('lock:gone', 'token', $now + 60, $now));
+        self::assertFalse($store->extendIf('lock:missing', 'token', $now + 60, $now));
+        self::assertTrue($store->extendIf('lock:job', 'token', $now + 60, $now));
+        self::assertSame('token', $store->get('lock:job', $now + 30), 'Past its first time, it lives.');
+
+        $store->set('value:a', 'x', null);
+        $store->set('value:*', 'x', null);
+        $store->clear('value:');
+        self::assertNull($store->get('value:a', $now));
+        self::assertNull($store->get('value:*', $now));
+        self::assertSame('token', $store->get('lock:job', $now), 'Another prefix stays.');
+        $store->clear('lock:*');
+        self::assertSame('token', $store->get('lock:job', $now), 'A prefix is matched as text, not as a pattern.');
+    }
+
     public function testIncrementCountsAsOneStepAndKeepsTheTimeTheCountStartedWith(): void
     {
         $clock = new FrozenClock('2026-01-31 12:00:00');
@@ -204,7 +227,7 @@ final class CacheStoreTest extends RedisTestCase
         self::assertFalse($cache->has('hits'));
         self::assertSame(1, $cache->increment('hits'));
         // Counted for ever, and never dropped by Redis.
-        self::assertSame(-1, $this->redis->command('TTL', $this->prefix . 'hits'));
+        self::assertSame(-1, $this->redis->command('TTL', $this->prefix . 'value:hits'));
 
         $cache->set('seen', 40, 30);
         self::assertSame(41, $cache->increment('seen', ttl: 600));

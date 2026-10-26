@@ -82,7 +82,7 @@ final class RedisProviderTest extends RedisTestCase
         $cache = $app->container->get(Cache::class);
         $cache->set('greeting', ['hello' => 'crab'], 60);
         self::assertSame(['hello' => 'crab'], $cache->get('greeting'));
-        self::assertSame(1, $this->redis->command('EXISTS', $this->prefix . 'cache:greeting'));
+        self::assertSame(1, $this->redis->command('EXISTS', $this->prefix . 'cache:value:greeting'));
 
         // Jobs pushed, run by the queue's own command, one of them on its second try.
         $queue = $app->container->get(Queue::class);
