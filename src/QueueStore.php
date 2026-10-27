@@ -135,6 +135,22 @@ final readonly class QueueStore implements Store
         LUA;
 
     /**
+     * Counts the job as taken from now, when it is still this worker's:
+     * reserved, on the try the worker says.
+     * ARGV: prefix, queue, id, the time now, the try it was taken on.
+     */
+    private const RENEW = <<<'LUA'
+        if redis.call('HGET', ARGV[1] .. 'job:' .. ARGV[3], 'attempts') ~= ARGV[5] then
+            return 0
+        end
+        if not redis.call('ZSCORE', ARGV[1] .. 'reserved:' .. ARGV[2], ARGV[3]) then
+            return 0
+        end
+        redis.call('ZADD', ARGV[1] .. 'reserved:' .. ARGV[2], 'XX', ARGV[4], ARGV[3])
+        return 1
+        LUA;
+
+    /**
      * Moves a job from wherever it waits to the failed set, with the reason.
      * Only on the try the worker says it was taken on: a job since given
      * to another worker is not this one's to give up on.
@@ -200,6 +216,22 @@ final readonly class QueueStore implements Store
             $job,
             json_decode($data, true, flags: JSON_THROW_ON_ERROR),
             (int) $attempts,
+        );
+    }
+
+    public function renew(Message $message, int $now): bool
+    {
+        return (
+            (int) $this->redis->command(
+                'EVAL',
+                self::RENEW,
+                0,
+                $this->prefix,
+                $message->queue,
+                $message->id,
+                $now,
+                $message->attempts,
+            ) === 1
         );
     }
 

@@ -119,6 +119,30 @@ final class QueueStoreTest extends RedisTestCase
         self::assertNull($this->store->reserve(['default'], $now + 400, 90));
     }
 
+    public function testARenewedJobStaysItsWorkersUntilItGoesUnrenewedTooLong(): void
+    {
+        $now = 1_000;
+        $this->store->push('default', 'App\\Export', [], $now, $now);
+        $held = $this->store->reserve(['default'], $now, 90);
+        self::assertNotNull($held);
+
+        self::assertTrue($this->store->renew($held, $now));
+        self::assertTrue($this->store->renew($held, $now + 60));
+        self::assertNull($this->store->reserve(['default'], $now + 149, 90));
+
+        // Ninety seconds without a renewal: another worker has it, and the first is told so.
+        $next = $this->store->reserve(['default'], $now + 150, 90);
+        self::assertSame([$held->id, 2], [$next?->id, $next?->attempts]);
+        self::assertFalse($this->store->renew($held, $now + 151));
+        self::assertTrue($this->store->renew($next, $now + 151));
+        $this->store->release($next, $now + 200);
+        self::assertFalse($this->store->renew($next, $now + 152));
+        self::assertSame(
+            ['oldest' => null, 'pending' => 0, 'delayed' => 1, 'processing' => 0],
+            $this->store->counts('default', $now + 152),
+        );
+    }
+
     public function testAJobGivenUpOnIsKeptUntilItIsRetriedOrForgotten(): void
     {
         $now = 1_000;
