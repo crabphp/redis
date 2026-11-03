@@ -76,15 +76,16 @@ final class BroadcastProcessesTest extends TestCase
             }
 
             $app = new Crab\App(new Crab\Config\Config([
-                'server' => ['with' => ['queue'], 'drain' => 1.0],
+                'server' => ['drain' => 1.0],
                 'websocket' => ['ping' => 0],
                 'broadcast' => ['carrier' => 'redis', 'prefix' => PREFIX . 'broadcast:'],
                 'redis' => ['url' => REDIS_URL, 'prefix' => PREFIX],
                 'queue' => ['store' => 'redis', 'sleep' => 0.01, 'grace' => 1.0],
                 'log' => ['path' => __DIR__ . '/app.log'],
             ]), basePath: __DIR__);
-            $app->register(...Crab\App::PLUGINS, ...Crab\App::OPTIONAL_PLUGINS);
-            $app->register(Crab\Redis\RedisPlugin::class);
+            // The queue's workers run beside HTTP, as a listed plugin's server does.
+            $app->register(...Crab\App::PLUGINS);
+            $app->register(Crab\Queue\QueuePlugin::class, Crab\Broadcast\BroadcastPlugin::class, Crab\Redis\RedisPlugin::class);
             $app->router->websocket('/live', WatchBroadcast::class);
             return $app;
             APP;
