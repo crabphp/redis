@@ -29,7 +29,7 @@ use Crab\Engine\Process\Worker;
  * queue and broadcast plugins, whose store and carrier it takes the place
  * of:
  *
- *     ->withPlugins([RedisPlugin::class, AppPlugin::class])
+ *     ->withPlugins([RedisPlugin::class])
  */
 final class RedisPlugin implements WorkerPlugin
 {

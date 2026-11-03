@@ -14,15 +14,15 @@ The cache plugin is a core one; the queue and broadcast plugins are optional. Li
 
 ```php
 // app.php
-use App\Plugins\AppPlugin;
+use App\Setup;
 use Crab\Queue\QueuePlugin;
 use Crab\Redis\RedisPlugin;
 
 ->withPlugins([
     QueuePlugin::class,
     RedisPlugin::class,
-    AppPlugin::class,
 ])
+->withSetup(Setup::class)
 ```
 
 Then choose which services use Redis:
