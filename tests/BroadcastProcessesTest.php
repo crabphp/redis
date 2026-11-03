@@ -83,8 +83,8 @@ final class BroadcastProcessesTest extends TestCase
                 'queue' => ['store' => 'redis', 'sleep' => 0.01, 'grace' => 1.0],
                 'log' => ['path' => __DIR__ . '/app.log'],
             ]), basePath: __DIR__);
-            $app->register(...Crab\App::PROVIDERS);
-            $app->register(Crab\Redis\RedisProvider::class);
+            $app->register(...Crab\App::PLUGINS, ...Crab\App::OPTIONAL_PLUGINS);
+            $app->register(Crab\Redis\RedisPlugin::class);
             $app->router->websocket('/live', WatchBroadcast::class);
             return $app;
             APP;

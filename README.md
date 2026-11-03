@@ -10,16 +10,18 @@ Use it when several servers share a cache, when the cache is read too often for 
 composer require crabphp/redis
 ```
 
-The cache, queue and broadcast providers are registered by default. Add the Redis provider to replace their stores:
+The cache plugin is a core one; the queue and broadcast plugins are optional. List the Redis plugin after whichever of those you use, to replace their stores:
 
 ```php
 // app.php
-use App\Providers\AppProvider;
-use Crab\Redis\RedisProvider;
+use App\Plugins\AppPlugin;
+use Crab\Queue\QueuePlugin;
+use Crab\Redis\RedisPlugin;
 
-->withProviders([
-    RedisProvider::class,
-    AppProvider::class,
+->withPlugins([
+    QueuePlugin::class,
+    RedisPlugin::class,
+    AppPlugin::class,
 ])
 ```
 
@@ -59,11 +61,11 @@ return [
 
 The cache's keys start with the prefix and `cache:`, the queue's with the prefix and `queue:`. `cache:clear` removes the cache's values and nothing else on the server; its locks stay unless you add `--locks`.
 
-Set `reply_timeout` when a stalled Redis connection should fail sooner, or when your commands need longer to answer. With no provider, pass it as `new EngineClient($url, replyTimeout: 0.5)`.
+Set `reply_timeout` when a stalled Redis connection should fail sooner, or when your commands need longer to answer. With no plugin, pass it as `new EngineClient($url, replyTimeout: 0.5)`.
 
 ## Broadcasting
 
-With `broadcast.carrier = 'redis'`, the provider binds `Crab\Contracts\Broadcast\Carrier` to `Crab\Redis\BroadcastCarrier`. Inject the framework broadcaster and send arrays or UTF-8 text:
+With `broadcast.carrier = 'redis'`, the plugin binds `Crab\Contracts\Broadcast\Carrier` to `Crab\Redis\BroadcastCarrier`. Inject the framework broadcaster and send arrays or UTF-8 text:
 
 ```php
 $this->broadcast->to('orders.42')->send(['status' => 'shipped']);
@@ -144,7 +146,7 @@ $redis = new EngineClient(
 );
 ```
 
-Create subscriptions in the worker that uses them. They resolve its event loop on first use and use the URL's TLS, `AUTH` and `SELECT` settings just like ordinary commands. `close()` ends a waiting iterator cleanly and cancels reconnecting; `$redis->close()` closes every subscription and its ordinary connection without suspending. Closing during connection opening cancels the attempt and queued commands; its socket, watchers and timer are released before close returns, even if the loop has stopped. `RedisProvider` does this when the worker stops. A new ordinary command may connect again after client close; a closed subscription needs replacing.
+Create subscriptions in the worker that uses them. They resolve its event loop on first use and use the URL's TLS, `AUTH` and `SELECT` settings just like ordinary commands. `close()` ends a waiting iterator cleanly and cancels reconnecting; `$redis->close()` closes every subscription and its ordinary connection without suspending. Closing during connection opening cancels the attempt and queued commands; its socket, watchers and timer are released before close returns, even if the loop has stopped. `RedisPlugin` does this when the worker stops. A new ordinary command may connect again after client close; a closed subscription needs replacing.
 
 The client continues to use RESP2, Redis's default protocol; it does not send `HELLO` or negotiate RESP3. Pattern subscriptions (`PSUBSCRIBE`) and sharded pub/sub are outside this API.
 
@@ -169,7 +171,7 @@ The client is Crab's own, `EngineClient`, written on the engine's event loop and
 - **A connection that fails is made again.** The commands waiting on it fail with `RedisException`, and the next command connects afresh.
 - **The stores know one interface,** `Crab\Redis\Client`. They use `command()`; applications can also `publish()`, `subscribe()` and `close()`.
 
-To use another client, implement `Client` and bind it after the provider:
+To use another client, implement `Client` and bind it after the plugin:
 
 ```php
 $container->singleton(Client::class, static fn (): Client => new MyClient(config('redis.url')));

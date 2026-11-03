@@ -5,13 +5,13 @@ declare(strict_types=1);
 namespace Crab\Redis\Tests;
 
 use Crab\App;
-use Crab\Broadcast\BroadcastProvider;
-use Crab\Cache\CacheProvider;
+use Crab\Broadcast\BroadcastPlugin;
+use Crab\Cache\CachePlugin;
 use Crab\Config\Config;
 use Crab\Contracts\Config\InvalidSettings;
-use Crab\Queue\QueueProvider;
+use Crab\Queue\QueuePlugin;
 use Crab\Redis\Client;
-use Crab\Redis\RedisProvider;
+use Crab\Redis\RedisPlugin;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -21,20 +21,20 @@ use PHPUnit\Framework\TestCase;
  */
 final class RedisSettingsTest extends TestCase
 {
-    public function testRedisIsAChoiceWhereTheProviderItIsAChoiceOfIsRegistered(): void
+    public function testRedisIsAChoiceWhereThePluginItIsAChoiceOfIsRegistered(): void
     {
         $app = new App(new Config([
             'cache' => ['store' => 'redis'],
             'queue' => ['store' => 'redis'],
             'broadcast' => ['carrier' => 'redis'],
         ]));
-        $app->register(CacheProvider::class, QueueProvider::class, BroadcastProvider::class, RedisProvider::class);
+        $app->register(CachePlugin::class, QueuePlugin::class, BroadcastPlugin::class, RedisPlugin::class);
         self::assertSame([], $app->config->problems());
         self::assertSame(['file', 'database', 'array', 'redis'], $app->config->rules()['cache']['store']['enum']);
 
-        // Without the cache provider there is no cache to offer a store to, and no rules for one.
+        // Without the cache plugin there is no cache to offer a store to, and no rules for one.
         $alone = new App(new Config());
-        $alone->register(RedisProvider::class);
+        $alone->register(RedisPlugin::class);
         self::assertSame(['app', 'log', 'server', 'websocket', 'redis'], array_keys($alone->config->rules()));
     }
 
@@ -45,7 +45,7 @@ final class RedisSettingsTest extends TestCase
             'timeout' => 0,
             'reply_timout' => 5,
         ]]));
-        $app->register(RedisProvider::class);
+        $app->register(RedisPlugin::class);
         try {
             $app->container->get(Client::class);
             self::fail('A client with settings that do not fit is not made.');

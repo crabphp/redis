@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Crab\Redis\Tests;
 
 use Crab\App;
-use Crab\Cache\CacheProvider;
+use Crab\Cache\CachePlugin;
 use Crab\Config\Config;
 use Crab\Console\Output;
 use Crab\Container\Container;
@@ -17,13 +17,13 @@ use Crab\Contracts\Queue\Queue;
 use Crab\Contracts\Queue\Store as QueueStoreContract;
 use Crab\Engine\Async\Async;
 use Crab\Engine\Process\Worker;
-use Crab\Queue\QueueProvider;
+use Crab\Queue\QueuePlugin;
 use Crab\Redis\CacheStore;
 use Crab\Redis\Client;
 use Crab\Redis\EngineClient;
 use Crab\Redis\QueueStore;
 use Crab\Redis\RedisException;
-use Crab\Redis\RedisProvider;
+use Crab\Redis\RedisPlugin;
 use Crab\Redis\Subscription;
 use Crab\Testing\WorkerHarness;
 
@@ -48,7 +48,7 @@ final class SendEmail
     }
 }
 
-final class RedisProviderTest extends RedisTestCase
+final class RedisPluginTest extends RedisTestCase
 {
     private string $log;
 
@@ -131,7 +131,7 @@ final class RedisProviderTest extends RedisTestCase
         $subscription = null;
         $redis = null;
         WorkerHarness::run(
-            [new RedisProvider()],
+            [new RedisPlugin()],
             function (Worker $worker, ContainerContract $container) use (&$subscription, &$redis): void {
                 $redis = $container->get(Client::class);
                 $redis->command('PING');
@@ -147,7 +147,7 @@ final class RedisProviderTest extends RedisTestCase
         self::assertSame(0, $this->redis->publish($this->prefix . 'worker', 'after stop'));
     }
 
-    public function testProviderStopClosesAnOpeningTlsSocketWithoutAnotherLoopTurn(): void
+    public function testPluginStopClosesAnOpeningTlsSocketWithoutAnotherLoopTurn(): void
     {
         $listener = stream_socket_server('tcp://127.0.0.1:0', $code, $reason);
         self::assertIsResource($listener, (string) $reason);
@@ -161,7 +161,7 @@ final class RedisProviderTest extends RedisTestCase
         $socket = $peer = $worker = null;
         try {
             WorkerHarness::run(
-                [new RedisProvider()],
+                [new RedisPlugin()],
                 static function (Worker $running, ContainerContract $container) use (
                     $listener,
                     $address,
@@ -203,8 +203,8 @@ final class RedisProviderTest extends RedisTestCase
                 $container,
             );
 
-            // Provider stop runs after the loop stops; do not await the opener here.
-            self::assertFalse(is_resource($socket), 'Provider stop left its opening TLS socket alive.');
+            // Plugin stop runs after the loop stops; do not await the opener here.
+            self::assertFalse(is_resource($socket), 'Plugin stop left its opening TLS socket alive.');
             self::assertSame([], $worker->loop->getIdentifiers());
         } finally {
             $worker?->loop->run();
@@ -215,7 +215,7 @@ final class RedisProviderTest extends RedisTestCase
         }
     }
 
-    public function testTheProviderPassesTheConfiguredReplyTimeoutToTheClient(): void
+    public function testThePluginPassesTheConfiguredReplyTimeoutToTheClient(): void
     {
         $app = $this->app(['redis' => ['url' => $this->url, 'reply_timeout' => 0.35]]);
         $redis = $app->container->get(Client::class);
@@ -258,7 +258,7 @@ final class RedisProviderTest extends RedisTestCase
                 + ['redis' => ['url' => $this->url, 'prefix' => $this->prefix], 'log' => ['path' => $this->log]],
             ),
         );
-        $app->register(CacheProvider::class, QueueProvider::class, RedisProvider::class);
+        $app->register(CachePlugin::class, QueuePlugin::class, RedisPlugin::class);
         return $app;
     }
 

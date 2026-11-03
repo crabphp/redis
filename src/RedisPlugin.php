@@ -9,7 +9,7 @@ use Crab\Contracts\Cache\Store as CacheStoreContract;
 use Crab\Contracts\Config\Config;
 use Crab\Contracts\Container\Container;
 use Crab\Contracts\Queue\Store as QueueStoreContract;
-use Crab\Contracts\WorkerProvider;
+use Crab\Contracts\WorkerPlugin;
 use Crab\Engine\Process\Worker;
 
 /**
@@ -25,13 +25,13 @@ use Crab\Engine\Process\Worker;
  * With "cache.store" set to "redis" the cache's entries are kept there,
  * and with "queue.store" set to "redis" the queue's jobs are. Register
  * broadcast.carrier set to redis carries updates between workers, using
- * broadcast.prefix for its channel names. Register it in app.php after the
- * default framework providers, whose stores and carrier it
- * takes the place of:
+ * broadcast.prefix for its channel names. List it in app.php after the
+ * queue and broadcast plugins, whose store and carrier it takes the place
+ * of:
  *
- *     ->withProviders([RedisProvider::class, AppProvider::class])
+ *     ->withPlugins([RedisPlugin::class, AppPlugin::class])
  */
-final class RedisProvider implements WorkerProvider
+final class RedisPlugin implements WorkerPlugin
 {
     public function register(Container $container): void
     {
@@ -53,7 +53,7 @@ final class RedisProvider implements WorkerProvider
                 'tls' => ['type' => 'object'],
             ],
         );
-        // "redis" becomes one of the choices, where the provider it is a choice of is registered.
+        // "redis" becomes one of the choices, where the plugin it is a choice of is registered.
         foreach ([
             'cache' => ['store', CacheStoreContract::class],
             'queue' => ['store', QueueStoreContract::class],
@@ -112,7 +112,7 @@ final class RedisProvider implements WorkerProvider
     {
         if ($container->get(Config::class)->get('broadcast.carrier') === 'redis') {
             // Direct users of the carrier contract bypass the framework's
-            // broadcaster lifetime; its monitor belongs to this provider too.
+            // broadcaster lifetime; its monitor belongs to this plugin too.
             $container->get(Carrier::class)->close();
         }
         $container->get(Client::class)->close();

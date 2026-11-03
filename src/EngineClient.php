@@ -490,7 +490,7 @@ final class EngineClient implements Client
             }
             stream_set_blocking($stream, false);
             // Cancellation owns the local socket until it is handed to the
-            // client. Provider stop cannot wait for this fiber's finally block.
+            // client. Plugin stop cannot wait for this fiber's finally block.
             $release = $cancellation?->subscribe(static function () use ($stream): void {
                 if (is_resource($stream)) {
                     fclose($stream);

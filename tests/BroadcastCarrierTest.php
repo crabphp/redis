@@ -349,16 +349,16 @@ final class BroadcastCarrierTest extends TestCase
         }
     }
 
-    public function testProviderStopClosesACarrierResolvedDirectlyByItsContract(): void
+    public function testPluginStopClosesACarrierResolvedDirectlyByItsContract(): void
     {
         $container = new \Crab\Container\Container();
         $container->instance(\Crab\Contracts\Config\Config::class, new \Crab\Config\Config([
-            'broadcast' => ['carrier' => 'redis', 'prefix' => 'provider:'],
+            'broadcast' => ['carrier' => 'redis', 'prefix' => 'plugin:'],
         ]));
-        $broadcastProvider = new \Crab\Broadcast\BroadcastProvider();
-        $broadcastProvider->register($container);
-        $provider = new \Crab\Redis\RedisProvider();
-        $provider->register($container);
+        $broadcastPlugin = new \Crab\Broadcast\BroadcastPlugin();
+        $broadcastPlugin->register($container);
+        $plugin = new \Crab\Redis\RedisPlugin();
+        $plugin->register($container);
         $client = $this->clients[] = new PairClient($this->broker);
         $container->instance(Client::class, $client);
         $carrier = $this->carriers[] = $container->get(\Crab\Contracts\Broadcast\Carrier::class);
@@ -368,8 +368,8 @@ final class BroadcastCarrierTest extends TestCase
             static function (): void {},
         ));
         $worker = new \Crab\Engine\Process\Worker($this->loop, new \Crab\Engine\Crab('test'), 0, [], 1.0);
-        $provider->stop($worker, $container);
-        $broadcastProvider->stop($worker, $container);
+        $plugin->stop($worker, $container);
+        $broadcastPlugin->stop($worker, $container);
         $this->broker->close();
         self::assertSame([], $this->loop->getIdentifiers());
     }
@@ -425,7 +425,7 @@ final class BroadcastCarrierTest extends TestCase
             'websocket' => ['ping' => $silent ? 0.01 : 0],
             'log' => ['path' => '/dev/null'],
         ]));
-        $app->register(...\Crab\App::PROVIDERS);
+        $app->register(...\Crab\App::PLUGINS, ...\Crab\App::OPTIONAL_PLUGINS);
         $app->container->instance(\Crab\Contracts\Broadcast\Carrier::class, $carrier);
         $sockets = new \ArrayObject();
         $app->router->websocket('/live/{channel}', static function (
@@ -500,7 +500,7 @@ final class BroadcastCarrierTest extends TestCase
         $carrier = $this->carrier('ready:');
         $this->broker->confirm = false;
         $app = new \Crab\App(new \Crab\Config\Config(['websocket' => ['ping' => 0], 'log' => ['path' => '/dev/null']]));
-        $app->register(...\Crab\App::PROVIDERS);
+        $app->register(...\Crab\App::PLUGINS, ...\Crab\App::OPTIONAL_PLUGINS);
         $app->container->instance(\Crab\Contracts\Broadcast\Carrier::class, $carrier);
         $app->router->websocket('/live', static function (\Crab\Contracts\WebSocket\Socket $socket): void {
             $socket->join('orders');
