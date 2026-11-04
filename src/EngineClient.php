@@ -31,6 +31,11 @@ use Crab\Engine\Suspension;
  */
 final class EngineClient implements Client
 {
+    /**
+     * The most written to the socket in one call: a large command goes out in pieces of this size.
+     */
+    private const WRITE_SIZE = 1_048_576;
+
     private readonly bool $encrypted;
     private readonly string $host;
     private readonly int $port;
@@ -53,6 +58,11 @@ final class EngineClient implements Client
      */
     private string $received = '';
     private string $unsent = '';
+    /**
+     * How much of $unsent has been written. A large command is written from
+     * here in bounded pieces, rather than copied again after every write.
+     */
+    private int $unsentAt = 0;
     private ?string $reader = null;
     private ?string $writer = null;
     /**
@@ -617,15 +627,15 @@ final class EngineClient implements Client
      */
     private function flush(EventLoop $loop): bool
     {
-        while ($this->unsent !== '') {
-            $sent = @fwrite($this->stream, $this->unsent);
+        while ($this->unsentAt < strlen($this->unsent)) {
+            $sent = @fwrite($this->stream, substr($this->unsent, $this->unsentAt, self::WRITE_SIZE));
             if ($sent === false) {
                 return false;
             }
             if ($sent === 0) {
                 break;
             }
-            $this->unsent = substr($this->unsent, $sent);
+            $this->unsentAt += $sent;
             $this->written += $sent;
             $now = hrtime(true) / 1_000_000_000;
             foreach ($this->waiting as &$waiting) {
@@ -637,6 +647,11 @@ final class EngineClient implements Client
                 }
             }
             unset($waiting);
+        }
+        if ($this->unsentAt === strlen($this->unsent)) {
+            // All of it is written: let it go.
+            $this->unsent = '';
+            $this->unsentAt = 0;
         }
         if ($this->unsent === '' && $this->writer !== null) {
             $loop->cancel($this->writer);
@@ -726,6 +741,7 @@ final class EngineClient implements Client
         $this->replyDeadline = null;
         $this->queued = $this->written = 0;
         $this->received = $this->unsent = '';
+        $this->unsentAt = 0;
         $this->waiting = [];
     }
 }

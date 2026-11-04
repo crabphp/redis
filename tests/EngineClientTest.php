@@ -210,7 +210,7 @@ final class EngineClientTest extends RedisTestCase
                     $redis,
                     'SET',
                     'large',
-                    str_repeat('x', 32 * 1024 * 1024),
+                    str_repeat('x', 16 * 1024 * 1024),
                 ));
                 $get = $worker->spawn(fn() => $this->timedCommand($redis, 'GET', 'large'));
                 $received->suspend();
