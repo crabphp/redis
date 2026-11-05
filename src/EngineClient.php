@@ -118,6 +118,11 @@ final class EngineClient implements Client
         private readonly float $subscriptionIdleInterval = 30.0,
         private readonly float $subscriptionPingTimeout = 5.0,
     ) {
+        if ($timeout <= 0 || !is_finite($timeout)) {
+            throw new \InvalidArgumentException(
+                'Redis connection timeout must be greater than zero seconds. Set timeout to a positive, finite number.',
+            );
+        }
         if ($replyTimeout <= 0 || !is_finite($replyTimeout)) {
             throw new \InvalidArgumentException(
                 'Redis reply timeout must be greater than zero seconds. Set replyTimeout to a positive, finite number.',
@@ -148,8 +153,24 @@ final class EngineClient implements Client
         $this->username = isset($parts['user']) && $parts['user'] !== '' ? rawurldecode($parts['user']) : null;
         // What stands before the host is still encoded; what parse_str() read from the query is not.
         $password = isset($parts['pass']) ? rawurldecode($parts['pass']) : $query['password'] ?? null;
-        $this->password = is_string($password) && $password !== '' ? $password : null;
-        $this->database = (int) ($query['database'] ?? ltrim($parts['path'] ?? '', '/'));
+        if ($password !== null && !is_string($password)) {
+            throw new \InvalidArgumentException(
+                'The Redis password must be a string. Use password=secret in the URL query.',
+            );
+        }
+        $this->password = $password !== '' ? $password : null;
+        $path = $parts['path'] ?? '';
+        $database = $query['database'] ?? ($path === '' || $path === '/' ? '0' : substr($path, 1));
+        if (
+            !is_string($database)
+            || preg_match('/\A(?:0|[1-9][0-9]*)\z/', $database) !== 1
+            || filter_var($database, FILTER_VALIDATE_INT, ['options' => ['min_range' => 0]]) === false
+        ) {
+            throw new \InvalidArgumentException(
+                'Set the Redis database to a nonnegative integer in the URL path or database query parameter.',
+            );
+        }
+        $this->database = (int) $database;
         // One round of the name servers, each given half the connection's time, and no falling
         // back to the system's resolver, which would hold the worker while it asked.
         $this->resolver = $this->resolver();

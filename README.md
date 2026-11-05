@@ -61,6 +61,8 @@ return [
 
 The cache's keys start with the prefix and `cache:`, the queue's with the prefix and `queue:`. `cache:clear` removes the cache's values and nothing else on the server; its locks stay unless you add `--locks`.
 
+The URL's database is a nonnegative decimal integer, such as `/2` or `?database=2`; an absent database selects `0`. Invalid database text is refused before connecting. A query password must be a string, and both timeouts must be positive and finite, including when constructing `EngineClient` yourself.
+
 Set `reply_timeout` when a stalled Redis connection should fail sooner, or when your commands need longer to answer. With no plugin, pass it as `new EngineClient($url, replyTimeout: 0.5)`.
 
 ## Broadcasting
