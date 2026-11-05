@@ -43,9 +43,9 @@ final readonly class QueueStore implements Store
         LUA;
 
     /**
-     * In each queue in turn: makes ready the jobs whose time has come and
-     * the ones a worker took and never reported on, then takes the first
-     * that is ready.
+     * In each queue in turn: takes the oldest expired reservation, then
+     * the oldest due job, then the first ready job. Taking directly from
+     * the sorted sets keeps later recovery batches from overtaking jobs.
      * ARGV: prefix, the time now, the seconds a worker may hold a job, then the queues.
      */
     private const RESERVE = <<<'LUA'
@@ -55,25 +55,27 @@ final readonly class QueueStore implements Store
             local ready = prefix .. 'ready:' .. queue
             local delayed = prefix .. 'delayed:' .. queue
             local reserved = prefix .. 'reserved:' .. queue
-            -- What has waited longest goes first: jobs whose time has come, and before them the
-            -- ones a worker took and never reported on. Each is put at the head, the newest first,
-            -- so that the oldest ends up in front. One whose job is gone is dropped.
-            local due = redis.call('ZREVRANGEBYSCORE', delayed, now, '-inf', 'WITHSCORES', 'LIMIT', 0, 100)
-            for index = 1, #due, 2 do
-                redis.call('ZREM', delayed, due[index])
-                if redis.call('EXISTS', prefix .. 'job:' .. due[index]) == 1 then
-                    -- Since when it may run, for whoever asks how long the oldest has waited.
-                    redis.call('HSET', prefix .. 'job:' .. due[index], 'at', due[index + 1])
-                    redis.call('LPUSH', ready, due[index])
+            local id = nil
+            for _, source in ipairs({{reserved, now - retryAfter}, {delayed, now}}) do
+                while true do
+                    local due = redis.call('ZRANGEBYSCORE', source[1], '-inf', source[2], 'WITHSCORES', 'LIMIT', 0, 1)
+                    if #due == 0 then
+                        break
+                    end
+                    redis.call('ZREM', source[1], due[1])
+                    if redis.call('EXISTS', prefix .. 'job:' .. due[1]) == 1 then
+                        id = due[1]
+                        if source[1] == delayed then
+                            redis.call('HSET', prefix .. 'job:' .. id, 'at', due[2])
+                        end
+                        break
+                    end
+                end
+                if id then
+                    break
                 end
             end
-            for _, id in ipairs(redis.call('ZREVRANGEBYSCORE', reserved, now - retryAfter, '-inf', 'LIMIT', 0, 100)) do
-                redis.call('ZREM', reserved, id)
-                if redis.call('EXISTS', prefix .. 'job:' .. id) == 1 then
-                    redis.call('LPUSH', ready, id)
-                end
-            end
-            local id = redis.call('LPOP', ready)
+            id = id or redis.call('LPOP', ready)
             while id do
                 local job = prefix .. 'job:' .. id
                 -- A job taken to have died may have been finished after all, by the worker that had it.

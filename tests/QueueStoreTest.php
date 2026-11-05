@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Crab\Redis\Tests;
 
 use Crab\Redis\QueueStore;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 final class QueueStoreTest extends RedisTestCase
 {
@@ -312,7 +313,10 @@ final class QueueStoreTest extends RedisTestCase
         $first = $this->store->reserve(['default'], 1_000, 90);
         $second = $this->store->reserve(['default'], 1_001, 90);
 
-        // Recovery moves both expired reservations, but hands out only the first.
+        // Earlier package versions recovered reservations into the ready list
+        // in batches. A worker from that generation may still report a failure.
+        $this->redis->command('ZREM', $this->prefix . 'reserved:default', $second->id);
+        $this->redis->command('LPUSH', $this->prefix . 'ready:default', $second->id);
         self::assertSame($first->id, $this->store->reserve(['default'], 1_100, 90)?->id);
         $this->store->fail($second, 'late failure', 1_101);
 
@@ -360,5 +364,37 @@ final class QueueStoreTest extends RedisTestCase
         $this->store->fail($this->store->reserve(['mail'], $now, 90), 'refused', $now + 1);
         self::assertSame(1, $this->store->retry(null, $now + 5_000));
         self::assertSame($now + 5_000, $this->store->counts('mail', $now + 5_010)['oldest']);
+    }
+
+    /**
+     * @return iterable<string, array{bool}>
+     */
+    public static function overdueJobs(): iterable
+    {
+        yield 'delayed' => [false];
+        yield 'expired reservations' => [true];
+    }
+
+    #[DataProvider('overdueJobs')]
+    public function testOverdueJobsAreTakenOldestFirstBeyondOneRecoveryBatch(bool $reserved): void
+    {
+        $ids = [];
+        for ($index = 0; $index < 105; ++$index) {
+            $ids[] = $this->store->push('default', 'App\\Export', [], $reserved ? 1_000 : 1_001 + $index, 1_000);
+            if ($reserved) {
+                $this->store->reserve(['default'], 1_000 + $index, 1_000);
+            }
+        }
+
+        $taken = [];
+        for ($index = 0; $index < 105; ++$index) {
+            $message = $this->store->reserve(['default'], 2_000, 90);
+            $taken[] = $message?->id;
+            if ($message !== null) {
+                $this->store->complete($message);
+            }
+        }
+        self::assertSame($ids, $taken);
+        self::assertSame(0, $this->store->size('default'));
     }
 }
