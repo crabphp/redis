@@ -33,7 +33,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           path: redis
-      # composer.json reads crabphp/framework from ../framework until there is a release.
+      # Tested against the framework's main, which composer.json reads from ../framework; a release requires ^0.6 of it.
       - uses: actions/checkout@v4
         with:
           repository: crabphp/framework
