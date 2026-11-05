@@ -16,6 +16,34 @@ final class QueueStoreTest extends RedisTestCase
         $this->store = new QueueStore($this->redis, $this->prefix);
     }
 
+    public function testJobDataKeepsWholeValuedFloatsThroughListingFailureAndRetry(): void
+    {
+        $data = ['amount' => 1.0, 'values' => [0.0, -2.0, 3, 1.5]];
+        $this->store->push('default', 'App\\Export', $data, 1_000, 1_000);
+        self::assertSame($data, $this->store->jobs('default', 'pending', 1_000)[0]->data);
+        $message = $this->store->reserve(['default'], 1_000, 90);
+        self::assertSame($data, $message->data);
+        $this->store->fail($message, 'refused', 1_001);
+        self::assertSame($data, $this->store->failed()[0]->data);
+        $this->store->retry($message->id, 1_002);
+        self::assertSame($data, $this->store->reserve(['default'], 1_002, 90)?->data);
+    }
+
+    public function testJobIdsStayExactBeyondLuaIntegerPrecision(): void
+    {
+        $this->redis->command('SET', $this->prefix . 'id', '9007199254740992');
+        $first = $this->store->push('default', 'App\\First', [], 1_000, 1_000);
+        $second = $this->store->push('default', 'App\\Second', [], 1_000, 1_000);
+
+        self::assertSame('9007199254740993', $first);
+        self::assertSame('9007199254740994', $second);
+        $taken = $this->store->reserve(['default'], 1_000, 90);
+        self::assertSame([$first, 'App\\First'], [$taken?->id, $taken?->job]);
+        $this->store->complete($taken);
+        $taken = $this->store->reserve(['default'], 1_000, 90);
+        self::assertSame([$second, 'App\\Second'], [$taken?->id, $taken?->job]);
+    }
+
     public function testJobsAreTakenInTheOrderPushedFromTheMostUrgentQueueFirst(): void
     {
         $now = 1_000;

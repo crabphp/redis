@@ -30,7 +30,9 @@ final readonly class QueueStore implements Store
      */
     private const PUSH = <<<'LUA'
         local prefix, queue = ARGV[1], ARGV[2]
-        local id = redis.call('INCR', prefix .. 'id')
+        redis.call('INCR', prefix .. 'id')
+        -- Keep the decimal string: Lua numbers cannot represent every Redis integer.
+        local id = redis.call('GET', prefix .. 'id')
         redis.call('HSET', prefix .. 'job:' .. id, 'queue', queue, 'job', ARGV[3], 'data', ARGV[4], 'attempts', 0, 'at', ARGV[5])
         if tonumber(ARGV[5]) <= tonumber(ARGV[6]) then
             redis.call('RPUSH', prefix .. 'ready:' .. queue, id)
@@ -197,7 +199,7 @@ final readonly class QueueStore implements Store
             $this->prefix,
             $queue,
             $job,
-            json_encode($data, JSON_THROW_ON_ERROR),
+            json_encode($data, JSON_THROW_ON_ERROR | JSON_PRESERVE_ZERO_FRACTION),
             $availableAt,
             $now,
         );
