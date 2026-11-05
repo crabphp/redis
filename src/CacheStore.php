@@ -102,22 +102,40 @@ final readonly class CacheStore implements Store
      */
     private const INCREMENT = <<<'LUA'
         local current = redis.call('GET', KEYS[1])
-        local count = 0
+        local count = '0'
         local expires = nil
         if current then
             local at, number = string.match(current, '^([^:]+):i:(-?%d+);$')
             if number and (at == 'n' or tonumber(at) > tonumber(ARGV[4])) then
-                count = tonumber(number)
+                count = number
                 expires = at
             end
         end
-        count = count + tonumber(ARGV[1])
+        -- Redis adds signed 64-bit integers exactly; Lua numbers lose integer bits.
+        -- No other caller sees the temporary integer while this script runs.
+        local function restore(error)
+            if current then
+                redis.call('SET', KEYS[1], current, 'KEEPTTL')
+            else
+                redis.call('DEL', KEYS[1])
+            end
+            return error
+        end
+        redis.call('SET', KEYS[1], count, 'KEEPTTL')
+        local result = redis.pcall('INCRBY', KEYS[1], ARGV[1])
+        if type(result) == 'table' and result.err then
+            return restore(result)
+        end
+        count = redis.call('GET', KEYS[1])
         if expires then
-            redis.call('SET', KEYS[1], expires .. ':i:' .. string.format('%d', count) .. ';', 'KEEPTTL')
+            result = redis.pcall('SET', KEYS[1], expires .. ':i:' .. count .. ';', 'KEEPTTL')
         elseif ARGV[3] == '0' then
-            redis.call('SET', KEYS[1], ARGV[2] .. ':i:' .. string.format('%d', count) .. ';')
+            result = redis.pcall('SET', KEYS[1], ARGV[2] .. ':i:' .. count .. ';')
         else
-            redis.call('SET', KEYS[1], ARGV[2] .. ':i:' .. string.format('%d', count) .. ';', 'EXAT', ARGV[3])
+            result = redis.pcall('SET', KEYS[1], ARGV[2] .. ':i:' .. count .. ';', 'EXAT', ARGV[3])
+        end
+        if type(result) == 'table' and result.err then
+            return restore(result)
         end
         return count
         LUA;

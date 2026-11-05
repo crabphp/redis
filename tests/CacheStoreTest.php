@@ -7,6 +7,7 @@ namespace Crab\Redis\Tests;
 use Crab\Cache\Cache;
 use Crab\Contracts\Cache\Lock;
 use Crab\Redis\CacheStore;
+use Crab\Redis\RedisException;
 use Crab\Testing\FrozenClock;
 
 final class CacheStoreTest extends RedisTestCase
@@ -236,6 +237,44 @@ final class CacheStoreTest extends RedisTestCase
         $cache->set('text', 'not a number');
         self::assertSame(1, $cache->increment('text'));
         self::assertSame(-2, $cache->increment('below', -2));
+    }
+
+    public function testCountersKeepEveryIntegerBitAndTheirOriginalExpiry(): void
+    {
+        $store = new CacheStore($this->redis, $this->prefix);
+        $now = time();
+        foreach ([
+            [9_007_199_254_740_992, 1, 9_007_199_254_740_993],
+            [-9_007_199_254_740_992, -1, -9_007_199_254_740_993],
+            [PHP_INT_MAX - 1, 1, PHP_INT_MAX],
+            [PHP_INT_MIN + 1, -1, PHP_INT_MIN],
+        ] as [$initial, $by, $expected]) {
+            $store->set('counter', serialize($initial), $now + 30);
+            self::assertSame($expected, $store->increment('counter', $by, $now + 600, $now));
+            self::assertSame(serialize($expected), $store->get('counter', $now + 29));
+            self::assertNull($store->get('counter', $now + 30));
+            self::assertEqualsWithDelta(90, $this->redis->command('TTL', $this->prefix . 'counter'), 2);
+        }
+        self::assertSame(PHP_INT_MAX, $store->increment('new', PHP_INT_MAX, null, $now));
+        self::assertSame(serialize(PHP_INT_MAX), $store->get('new', $now));
+    }
+
+    public function testAnOverflowingCounterIsLeftWithItsValueAndExpiry(): void
+    {
+        $store = new CacheStore($this->redis, $this->prefix);
+        $now = time();
+        foreach ([[PHP_INT_MAX, 1], [PHP_INT_MIN, -1]] as [$initial, $by]) {
+            $store->set('counter', serialize($initial), $now + 30);
+            $failure = null;
+            try {
+                $store->increment('counter', $by, null, $now);
+            } catch (RedisException $error) {
+                $failure = $error;
+            }
+            self::assertInstanceOf(RedisException::class, $failure);
+            self::assertSame(serialize($initial), $store->get('counter', $now));
+            self::assertEqualsWithDelta(90, $this->redis->command('TTL', $this->prefix . 'counter'), 2);
+        }
     }
 
     public function testTheFrameworksCacheWorksOnIt(): void
