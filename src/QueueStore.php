@@ -357,8 +357,11 @@ final readonly class QueueStore implements Store
                 $names[$match[1]] = true;
             }
         } while ((string) $cursor !== '0');
-        foreach ($this->failed(200) as $message) {
-            $names[$message->queue] = true;
+        foreach ($this->failedIds() as $id) {
+            $queue = $this->redis->command('HGET', $this->prefix . 'job:' . $id, 'queue');
+            if (is_string($queue)) {
+                $names[$queue] = true;
+            }
         }
         return array_map(strval(...), array_keys($names));
     }

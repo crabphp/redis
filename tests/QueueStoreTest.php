@@ -213,6 +213,18 @@ final class QueueStoreTest extends RedisTestCase
         self::assertSame(2, $this->store->size('mail'));
     }
 
+    public function testQueuesIncludeThoseWithOnlyOlderFailedJobs(): void
+    {
+        $this->store->push('older', 'App\\Export', [], 1_000, 1_000);
+        $this->store->fail($this->store->reserve(['older'], 1_000, 90), 'refused', 1_000);
+        for ($index = 1; $index <= 200; ++$index) {
+            $this->store->push('newer', 'App\\Export', [], 1_000, 1_000);
+            $this->store->fail($this->store->reserve(['newer'], 1_000, 90), 'refused', 1_000 + $index);
+        }
+
+        self::assertEqualsCanonicalizing(['older', 'newer'], $this->store->queues());
+    }
+
     public function testAJobIsAlwaysInOnePlaceHoweverItIsMoved(): void
     {
         $now = 1_000;
