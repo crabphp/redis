@@ -104,7 +104,7 @@ final class EngineClient implements Client
      * @param string $url Where the server is: "redis://127.0.0.1:6379", with "?password=..." and "&database=1" when needed, or "rediss://" for an encrypted connection.
      * @param float $timeout Seconds to wait for a connection before the command fails.
      * @param array<string, mixed> $tls PHP's "ssl" context options for an encrypted connection, such as "cafile".
-     * @param float $replyTimeout Seconds to wait for a reply after writing a command, in addition to any explicit blocking timeout.
+     * @param float $replyTimeout Seconds to write a command, then wait for its reply; any explicit blocking timeout is added to the reply wait.
      * @param int $subscriptionBuffer Maximum undelivered messages per subscription; the oldest are dropped at the limit.
      * @param float $subscriptionIdleInterval Idle seconds before checking a subscription with PING.
      * @param float $subscriptionPingTimeout Seconds to wait for that PING, independent of ordinary reply deadlines.

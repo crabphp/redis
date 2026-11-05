@@ -1,28 +1,35 @@
 # Crab Redis
 
-Redis for the [Crab framework](../framework): a cache store, a queue store and a broadcast carrier. A command waits for Redis without holding its worker, so other requests and jobs go on meanwhile. The client is Crab's own, on the framework's engine, with no other dependency.
+Redis for the [Crab framework](https://github.com/crabphp/framework): a cache store, a queue store and a broadcast carrier. A command waits for Redis without holding its worker, so other requests and jobs go on meanwhile. The client is Crab's own, on the framework's engine, with no other dependency.
 
 Use it when several servers share a cache, when the cache is read too often for the database, or when the queue has more workers than a database table hands jobs to comfortably. A small application does not need it: the framework's file and database stores are enough.
 
 ## Installation
 
+Requires PHP 8.4 or later, Crab framework 0.6.x and Redis 6.2 or later.
+
 ```sh
 composer require crabphp/redis
 ```
 
-The cache plugin is a core one; the queue and broadcast plugins are optional. List the Redis plugin after whichever of those you use, to replace their stores:
+The cache plugin is a core one; the queue and broadcast plugins are optional. This example enables all three Redis stores. Leave out `QueuePlugin` or `BroadcastPlugin` and its configuration file when you do not use that service. Keep `RedisPlugin` after the plugins whose stores it replaces, and your application's setup last:
 
 ```php
 // app.php
 use App\Setup;
+use Crab\App;
+use Crab\Broadcast\BroadcastPlugin;
 use Crab\Queue\QueuePlugin;
 use Crab\Redis\RedisPlugin;
 
-->withPlugins([
-    QueuePlugin::class,
-    RedisPlugin::class,
-])
-->withSetup(Setup::class)
+return App::configure(__DIR__)
+    ->withPlugins([
+        QueuePlugin::class,
+        BroadcastPlugin::class,
+        RedisPlugin::class,
+    ])
+    ->withSetup(Setup::class)
+    ->create();
 ```
 
 Then choose which services use Redis:
@@ -30,15 +37,21 @@ Then choose which services use Redis:
 ```php
 // config/cache.php
 return ['store' => 'redis'];
+```
 
+```php
 // config/queue.php
 return ['store' => 'redis'];
+```
 
+```php
 // config/broadcast.php
 return ['carrier' => 'redis', 'prefix' => 'shop:broadcast:'];
 ```
 
 Nothing else changes. `Cache`, `Queue`, `queue:work`, supervisors, retries and `queue:failed` work as they do on the other stores. There is no table to install.
+
+`App\Setup` is your application's class implementing `Crab\Contracts\Plugin`; omit `withSetup()` if you have none. `php cua start` runs the queue workers beside HTTP when `QueuePlugin` is listed. There is no `server.with` setting.
 
 ## Configuration
 
@@ -53,7 +66,7 @@ return [
 
 | Setting | Default | |
 | --- | --- | --- |
-| `redis.url` | `redis://127.0.0.1:6379` | Where the server is. `redis://user:secret@host:6379/1` names who asks and which database; `?password=secret&database=1` does the same. `rediss://` for an encrypted connection |
+| `redis.url` | `redis://127.0.0.1:6379` | Where the server is. `redis://user:secret@host:6379/1` names who asks and which database; `redis://user@host:6379?password=secret&database=1` gives the same settings. `rediss://` for an encrypted connection |
 | `redis.prefix` | `crab:` | Put before every key, to keep two applications apart on one server |
 | `redis.timeout` | `2.0` | Seconds to wait for a connection before a command fails |
 | `redis.reply_timeout` | `5.0` | Positive seconds allowed to write a command, then to wait for its reply; an explicit blocking timeout is added to the reply wait |
@@ -75,7 +88,7 @@ $this->broadcast->to('orders.42')->send(['status' => 'shipped']);
 
 Publications use the ordinary client. Each worker opens one dedicated subscription on its first local socket join, subscribes on the first join to a channel and unsubscribes after the last leave. `broadcast.prefix` defaults to `crab:broadcast:` independently of `redis.prefix`; set a distinct broadcast prefix for each application sharing Redis.
 
-Delivery is at most once, ordered per sender and channel, with no replay. A subscription gap is logged once; a 50 ms monitor closes joined local sockets with 1012 so clients reconnect and refetch current state. The old subscription is retired, and the next join opens a fresh one. Stop and reload close the subscription and cancel its watchers. See the framework [Broadcasting guide](../framework/docs/broadcasting.md) for limits, transactions and tests.
+Delivery is at most once, ordered per sender and channel, with no replay. A subscription gap is logged once; a 50 ms monitor closes joined local sockets with 1012 so clients reconnect and refetch current state. The old subscription is retired, and the next join opens a fresh one. Stop and reload close the subscription and cancel its watchers. See the framework [Broadcasting guide](https://github.com/crabphp/framework/blob/main/docs/broadcasting.md) for limits, transactions and tests.
 
 ## Using Redis yourself
 
@@ -155,15 +168,16 @@ The client continues to use RESP2, Redis's default protocol; it does not send `H
 ## What to know
 
 - **One server.** The queue's scripts build key names from the prefix, which a Redis Cluster does not allow. Use one server, or a primary with replicas.
-- **The server's name** is looked up through the system's name servers and hosts file, within `redis.timeout`, and never in a way that holds the worker.
-- **When Redis is down,** a command fails after `redis.timeout` seconds at most, at once when the connection is refused. The cache does not fall back to another store; a request that needs it answers `500`.
-- **Jobs run at least once,** as on every store. A job a worker took and never reported on is given out again after `queue.retry_after` seconds.
+- **The server's name** is looked up through the system's name servers and hosts file without holding the worker. DNS attempts use timeouts derived from `redis.timeout`.
+- **When Redis cannot be reached,** the client throws `RedisException`. Connection establishment uses `redis.timeout`; writes and replies use `redis.reply_timeout`. The cache does not fall back to another store; a request that needs it answers `500`.
+- **Jobs run at least once,** as on every store. A worker renews the reservation while a job runs. After `queue.retry_after` seconds without renewal, another worker may take it.
 - **Outside a worker,** in a command such as `cache:clear`, each Redis command opens a connection and closes it. Inside a worker one connection is kept.
 - **A command that waits, such as `BLPOP`, holds the worker's connection** until it returns, and the worker's other commands wait behind it. The stores use none. For one of your own, make a second `EngineClient` for it.
 - **A reply has a deadline.** A server that accepts a command and never answers fails it after `redis.reply_timeout` with `RedisException` naming the command. Every command waiting on that connection fails with the same reason; the next command connects again. This applies outside workers too.
 - **Writing has a deadline too.** A command must be fully written within `redis.reply_timeout` seconds of being queued on the connection. A server that stops reading cannot leave large commands and their callers waiting forever. The reply deadline starts once the command is fully written, including for a command with an indefinite blocking timeout.
 - **Explicit blocking time is added to the reply deadline.** `BLPOP`, `BRPOP`, `BRPOPLPUSH`, `BLMOVE`, `BZPOPMIN` and `BZPOPMAX` give seconds as their last argument; `XREAD` and `XREADGROUP` give milliseconds with `BLOCK`. A block of `0` waits indefinitely. Other commands use the ordinary reply timeout.
 - **The cache's clock is yours.** An entry carries the time it expires, and the application's clock decides. Redis drops it a minute later on its own.
+- **Cache counters use signed 64-bit integers.** An increment that would overflow throws `RedisException` and leaves the value and its expiry unchanged.
 
 ## How it is built
 
@@ -182,11 +196,12 @@ $container->singleton(Client::class, static fn (): Client => new MyClient(config
 
 ## Tests
 
-The tests need a Redis server and are skipped without one:
+Tests that need Redis are skipped unless `CRAB_TEST_REDIS_URL` is set. Use a disposable Redis with ACL administration enabled: authentication tests create and remove users, and the process test starts HTTP and queue workers. Tests use unique key and channel prefixes.
 
 ```sh
-CRAB_TEST_REDIS_URL=redis://127.0.0.1:6379 composer test
+CRAB_TEST_REDIS_URL=redis://127.0.0.1:6399 composer test
 ```
 
-Each test writes under a prefix of its own and removes its keys afterwards.
-The pub/sub restart and TLS checks start disposable Redis processes on unused ports and stop only those processes. Scripted peers cover stalled heartbeats and control replies.
+Each test removes its keys afterwards. Install `redis-server` on `PATH` for the pub/sub restart and TLS checks, which start disposable Redis processes on unused ports and stop only those processes. Scripted peers cover stalled reads, heartbeats and control replies. The process checks need `pcntl` and `posix`.
+
+Run `composer format:check` and `composer lint` before committing. CI tests PHP 8.4 and 8.5 against framework v0.6.1 and `main`, and fails if an integration test is skipped.

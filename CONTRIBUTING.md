@@ -5,5 +5,7 @@ Setup, tests, formatting, linting and conventions are the same as the framework'
 ```sh
 composer format:check
 composer lint
-vendor/bin/phpunit
+CRAB_TEST_REDIS_URL=redis://127.0.0.1:6399 composer test
 ```
+
+See the [README](README.md#tests) for Redis and process test requirements. CI requires every integration test to run.

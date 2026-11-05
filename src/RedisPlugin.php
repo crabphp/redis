@@ -19,12 +19,12 @@ use Crab\Engine\Process\Worker;
  *     url      where the server is; "redis://127.0.0.1:6379" unless set
  *     prefix   put before every key, to keep two applications apart on one server; "crab:"
  *     timeout  seconds to wait for a connection before a command fails; 2
- *     reply_timeout  seconds to wait for a command's reply, besides any blocking timeout; 5
+ *     reply_timeout  seconds to write a command, then wait for its reply, besides any blocking timeout; 5
  *     tls      PHP's "ssl" context options for a "rediss://" address, such as "cafile"; none unless set
  *
  * With "cache.store" set to "redis" the cache's entries are kept there,
- * and with "queue.store" set to "redis" the queue's jobs are. Register
- * broadcast.carrier set to redis carries updates between workers, using
+ * and with "queue.store" set to "redis" the queue's jobs are. Setting
+ * "broadcast.carrier" to "redis" carries updates between workers, using
  * broadcast.prefix for its channel names. List it in app.php after the
  * queue and broadcast plugins, whose store and carrier it takes the place
  * of:

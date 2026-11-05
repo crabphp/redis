@@ -6,6 +6,7 @@ namespace Crab\Redis\Tests;
 
 require_once dirname(__DIR__) . '/vendor/autoload.php';
 
+use Crab\Redis\EngineClient;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -16,19 +17,18 @@ final class BroadcastProcessesTest extends TestCase
 {
     private string $directory;
     private string $address;
+    private string $prefix;
+    private EngineClient $redis;
     private array $clients = [];
 
     protected function setUp(): void
     {
         $url = getenv('CRAB_TEST_REDIS_URL');
         if ($url === false || $url === '' || !extension_loaded('pcntl') || !extension_loaded('posix')) {
-            self::markTestSkipped(
-                'The orchestrator supplies throwaway Redis and pcntl/posix for the process integration test.',
-            );
+            self::markTestSkipped('Set CRAB_TEST_REDIS_URL and install pcntl/posix to run the broadcast process test.');
         }
-        if ((parse_url($url, PHP_URL_PORT) ?? 6379) !== 6399) {
-            self::markTestSkipped('Use throwaway Redis on port 6399; the owner Redis on port 6379 is off limits.');
-        }
+        $this->prefix = 'broadcast-process:' . bin2hex(random_bytes(8)) . ':';
+        $this->redis = new EngineClient($url);
         $this->directory = sys_get_temp_dir() . '/crab-broadcast-' . bin2hex(random_bytes(8));
         mkdir($this->directory);
         $autoload = dirname(__DIR__) . '/vendor/autoload.php';
@@ -36,7 +36,7 @@ final class BroadcastProcessesTest extends TestCase
             $this->directory . '/cua',
             "<?php\nrequire "
             . var_export($autoload, true)
-            . ";\n\$app = require __DIR__ . '/app.php';\nexit(\$app->console->run(array_slice(\$argv, 1)));\n",
+            . ";\nexit(Crab\\Cua::run(__DIR__ . '/app.php', array_slice(\$argv, 1)));\n",
         );
         $source = <<<'APP'
             <?php
@@ -91,7 +91,7 @@ final class BroadcastProcessesTest extends TestCase
             APP;
         $source = str_replace(
             ['REDIS_URL', 'PREFIX'],
-            [var_export($url, true), var_export('broadcast-process:' . bin2hex(random_bytes(8)) . ':', true)],
+            [var_export($url, true), var_export($this->prefix, true)],
             $source,
         );
         file_put_contents($this->directory . '/app.php', $source);
@@ -127,11 +127,22 @@ final class BroadcastProcessesTest extends TestCase
             $file->isDir() ? rmdir($file->getPathname()) : unlink($file->getPathname());
         }
         rmdir($this->directory);
+        try {
+            $cursor = '0';
+            do {
+                [$cursor, $keys] = $this->redis->command('SCAN', $cursor, 'MATCH', $this->prefix . '*', 'COUNT', 500);
+                if ($keys !== []) {
+                    $this->redis->command('DEL', ...$keys);
+                }
+            } while ((string) $cursor !== '0');
+        } finally {
+            $this->redis->close();
+        }
     }
 
     public function testMessagesFromBothHttpWorkersAndAQueueWorkerReachOtherProcesses(): void
     {
-        [$status, $output] = $this->command('serve', '--daemon', '--workers=2', '--address=' . $this->address);
+        [$status, $output] = $this->command('start', '--daemon', '--workers=2', '--address=' . $this->address);
         self::assertSame(0, $status, $output);
         $a = $this->connect();
         $aPid = $this->receive($a, 'the first HTTP worker identity')['worker'];
@@ -280,7 +291,7 @@ final class BroadcastProcessesTest extends TestCase
         foreach ($pipes as $pipe) {
             stream_set_blocking($pipe, false);
         }
-        $seconds = $arguments[0] === 'serve' ? 30.0 : 10.0;
+        $seconds = $arguments[0] === 'start' ? 30.0 : 10.0;
         $deadline = microtime(true) + $seconds;
         $output = '';
         $timedOut = false;

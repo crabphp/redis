@@ -1,6 +1,6 @@
 {
     "name": "crabphp/redis",
-    "description": "Redis for the Crab framework: a cache store and a queue store that wait without holding a worker",
+    "description": "Redis cache, queue and broadcast stores for the Crab framework, without holding a worker",
     "type": "library",
     "license": "MIT",
     "require": {
