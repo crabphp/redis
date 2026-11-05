@@ -114,6 +114,7 @@ final readonly class QueueStore implements Store
         redis.call('ZREM', prefix .. 'reserved:' .. queue, id)
         redis.call('ZREM', prefix .. 'delayed:' .. queue, id)
         redis.call('LREM', prefix .. 'ready:' .. queue, 0, id)
+        redis.call('ZREM', prefix .. 'failed', id)
         return redis.call('DEL', prefix .. 'job:' .. id)
         LUA;
 
@@ -151,9 +152,8 @@ final readonly class QueueStore implements Store
         LUA;
 
     /**
-     * Moves a job from wherever it waits to the failed set, with the reason.
-     * Only on the try the worker says it was taken on: a job since given
-     * to another worker is not this one's to give up on.
+     * Moves a reserved job to the failed set, with the reason, only while
+     * it is held on the try the worker says it was taken on.
      * ARGV: prefix, queue, id, the error, the time now, the try it was taken on.
      */
     private const FAIL = <<<'LUA'
@@ -161,9 +161,9 @@ final readonly class QueueStore implements Store
         if redis.call('HGET', prefix .. 'job:' .. id, 'attempts') ~= ARGV[6] then
             return 0
         end
-        redis.call('ZREM', prefix .. 'reserved:' .. queue, id)
-        redis.call('ZREM', prefix .. 'delayed:' .. queue, id)
-        redis.call('LREM', prefix .. 'ready:' .. queue, 0, id)
+        if redis.call('ZREM', prefix .. 'reserved:' .. queue, id) == 0 then
+            return 0
+        end
         redis.call('HSET', prefix .. 'job:' .. id, 'error', ARGV[4], 'failed_at', ARGV[5])
         return redis.call('ZADD', prefix .. 'failed', ARGV[5], id)
         LUA;

@@ -252,6 +252,50 @@ final class QueueStoreTest extends RedisTestCase
         self::assertSame([], $this->redis->command('KEYS', $this->prefix . 'job:*'));
     }
 
+    public function testAReleasedJobCannotBeFailedByItsFormerHolder(): void
+    {
+        $this->store->push('default', 'App\\Export', [], 1_000, 1_000);
+        $message = $this->store->reserve(['default'], 1_000, 90);
+        $this->store->release($message, 1_200);
+
+        $this->store->fail($message, 'late failure', 1_100);
+
+        self::assertSame([], $this->store->failed());
+        self::assertSame(1, $this->store->counts('default', 1_100)['delayed']);
+        self::assertSame($message->id, $this->store->reserve(['default'], 1_200, 90)?->id);
+    }
+
+    public function testARecoveredJobWaitingForAnotherWorkerCannotBeFailedByItsFormerHolder(): void
+    {
+        $this->store->push('default', 'App\\First', [], 1_000, 1_000);
+        $this->store->push('default', 'App\\Second', [], 1_000, 1_000);
+        $first = $this->store->reserve(['default'], 1_000, 90);
+        $second = $this->store->reserve(['default'], 1_001, 90);
+
+        // Recovery moves both expired reservations, but hands out only the first.
+        self::assertSame($first->id, $this->store->reserve(['default'], 1_100, 90)?->id);
+        $this->store->fail($second, 'late failure', 1_101);
+
+        self::assertSame([], $this->store->failed());
+        self::assertSame($second->id, $this->store->reserve(['default'], 1_101, 90)?->id);
+    }
+
+    public function testLateCompletionRemovesAFailedJobFromEveryIndex(): void
+    {
+        $this->store->push('default', 'App\\Export', [], 1_000, 1_000);
+        $slow = $this->store->reserve(['default'], 1_000, 90);
+        $next = $this->store->reserve(['default'], 1_090, 90);
+        $this->store->fail($next, 'gave up', 1_091);
+
+        $this->store->complete($slow);
+
+        self::assertSame(0, $this->redis->command('ZCARD', $this->prefix . 'failed'));
+        self::assertSame([], $this->store->failed());
+        self::assertSame(0, $this->store->retry(null, 1_100));
+        self::assertSame(0, $this->store->forget(null));
+        self::assertSame([], $this->redis->command('KEYS', $this->prefix . 'job:*'));
+    }
+
     public function testWhatHasWaitedLongestIsTakenFirstAndSaidToBeTheOldest(): void
     {
         $now = 1_000;
