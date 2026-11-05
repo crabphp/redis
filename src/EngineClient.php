@@ -74,9 +74,9 @@ final class EngineClient implements Client
     private ?string $replyTimer = null;
     private ?float $replyDeadline = null;
     /**
-     * Who waits for a reply, in wire order. A null timeout means an
-     * indefinite blocking command; a null deadline means it is not yet
-     * fully written, or has no deadline.
+     * Who waits for a reply, in wire order. Until written, each command
+     * has a write deadline. Then its reply timeout applies; null means
+     * an indefinite blocking command with no reply deadline.
      *
      * @var list<array{suspension: Suspension, name: string, timeout: ?float, deadline: ?float, end: int}>
      */
@@ -274,7 +274,7 @@ final class EngineClient implements Client
             'suspension' => $suspension,
             'name' => strtoupper((string) $words[0]),
             'timeout' => $this->replyWait($words),
-            'deadline' => null,
+            'deadline' => (hrtime(true) / 1_000_000_000) + $this->replyTimeout,
             'end' => $this->queued,
         ];
         $this->unsent .= $bytes;
@@ -348,7 +348,7 @@ final class EngineClient implements Client
     }
 
     /**
-     * One timer watches the earliest reply deadline, normally the oldest
+     * One timer watches the earliest write or reply deadline, normally the oldest
      * command. Keeping a timer per pipelined command would add watchers
      * without changing how a timeout drops the whole connection. A later
      * command can expire first when an earlier one explicitly blocks.
@@ -388,9 +388,10 @@ final class EngineClient implements Client
                     continue;
                 }
 
-                $this->fail(
-                    new RedisException("Redis did not answer {$waiting['name']} within {$waiting['timeout']} seconds"),
-                );
+                $writing = $waiting['end'] > $this->written;
+                $action = $writing ? 'accept' : 'answer';
+                $timeout = $writing ? $this->replyTimeout : $waiting['timeout'];
+                $this->fail(new RedisException("Redis did not {$action} {$waiting['name']} within {$timeout} seconds"));
                 return;
             }
         });
@@ -636,14 +637,15 @@ final class EngineClient implements Client
                 break;
             }
             $this->unsentAt += $sent;
+            $before = $this->written;
             $this->written += $sent;
             $now = hrtime(true) / 1_000_000_000;
             foreach ($this->waiting as &$waiting) {
                 if ($waiting['end'] > $this->written) {
                     break;
                 }
-                if ($waiting['deadline'] === null && $waiting['timeout'] !== null) {
-                    $waiting['deadline'] = $now + $waiting['timeout'];
+                if ($waiting['end'] > $before) {
+                    $waiting['deadline'] = $waiting['timeout'] === null ? null : $now + $waiting['timeout'];
                 }
             }
             unset($waiting);

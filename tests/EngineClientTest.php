@@ -60,6 +60,56 @@ final class EngineClientTest extends RedisTestCase
         });
     }
 
+    public function testAPeerThatStopsReadingCannotHoldUnwrittenCommandsForever(): void
+    {
+        [$results, $clean] = WorkerHarness::run([], function (Worker $worker): array {
+            $loop = $worker->loop;
+            $before = $loop->getIdentifiers();
+            $listener = stream_socket_server('tcp://127.0.0.1:0');
+            stream_set_blocking($listener, false);
+            $peer = null;
+            $accept = $loop->onReadable($listener, static function (string $watcher) use (
+                $loop,
+                $listener,
+                &$peer,
+            ): void {
+                $peer = stream_socket_accept($listener, 0);
+                $loop->cancel($watcher);
+
+                // Keep the connection open without reading any command bytes.
+            });
+            $url = 'redis://' . stream_socket_get_name($listener, false);
+            $redis = new EngineClient($url, replyTimeout: 0.2);
+            $deadline = $loop->delay(3.0, $redis->close(...));
+            try {
+                $first = $worker->spawn(fn() => $this->timedCommand(
+                    $redis,
+                    'SET',
+                    'large',
+                    str_repeat('x', 16 * 1024 * 1024),
+                ));
+                $second = $worker->spawn(fn() => $this->timedCommand($redis, 'GET', 'other'));
+                $results = [$first->await(), $second->await()];
+            } finally {
+                $redis->close();
+                $loop->cancel($accept);
+                $loop->cancel($deadline);
+                if (is_resource($peer)) {
+                    fclose($peer);
+                }
+                fclose($listener);
+            }
+            return [$results, $before === $loop->getIdentifiers()];
+        });
+
+        foreach ($results as [$error, $elapsed]) {
+            self::assertInstanceOf(RedisException::class, $error);
+            self::assertSame('Redis did not accept SET within 0.2 seconds', $error->getMessage());
+            self::assertLessThan(3.0, $elapsed);
+        }
+        self::assertTrue($clean, 'A stalled write left socket watchers or a timeout behind.');
+    }
+
     public function testOneReplyInAPipelineSucceedsAndTheOthersFailTogether(): void
     {
         WorkerHarness::run([], function (Worker $worker): void {
