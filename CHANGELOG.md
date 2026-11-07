@@ -2,7 +2,7 @@
 
 Crab Redis follows [semantic versioning](https://semver.org). Before 1.0, a minor version may break what an application writes; the entry says what to change.
 
-## Unreleased
+## 0.1.1 — 2026-11-07
 
 - A failure only changes a job still reserved by that worker. Completing a job after another worker failed it also removes its failed index, so retrying cannot recreate an incomplete job.
 - Queue payloads keep whole-valued floats, and job IDs stay exact beyond Lua's integer precision. Queue lists include queues whose only failed jobs are older than the latest 200.
