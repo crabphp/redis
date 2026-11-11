@@ -6,7 +6,7 @@ Use it when several servers share a cache, when the cache is read too often for 
 
 ## Installation
 
-Requires PHP 8.4 or later, Crab framework 0.6.x and Redis 6.2 or later.
+Requires PHP 8.4 or later, Crab framework 0.7.x and Redis 6.2 or later.
 
 ```sh
 composer require crabphp/redis
@@ -204,4 +204,4 @@ CRAB_TEST_REDIS_URL=redis://127.0.0.1:6399 composer test
 
 Each test removes its keys afterwards. Install `redis-server` on `PATH` for the pub/sub restart and TLS checks, which start disposable Redis processes on unused ports and stop only those processes. Scripted peers cover stalled reads, heartbeats and control replies. The process checks need `pcntl` and `posix`.
 
-Run `composer format:check` and `composer lint` before committing. CI tests PHP 8.4 and 8.5 against framework v0.6.1 and `main`, and fails if an integration test is skipped.
+Run `composer format:check` and `composer lint` before committing. CI tests PHP 8.4 and 8.5 against framework `v0.7.0` and `main`, and fails if an integration test is skipped.

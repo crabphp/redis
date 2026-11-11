@@ -20,7 +20,7 @@ jobs:
       fail-fast: false
       matrix:
         php: ['8.4', '8.5']
-        framework: ['v0.6.3', 'main']
+        framework: ['v0.7.0', 'main']
     services:
       redis:
         image: redis:7
