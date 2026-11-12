@@ -2,6 +2,10 @@
 
 Crab Redis follows [semantic versioning](https://semver.org). Before 1.0, a minor version may break what an application writes; the entry says what to change.
 
+## Unreleased
+
+- **Sessions in Redis:** with `session.driver` set to `redis`, `RedisPlugin` keeps the framework's sessions in Redis, under the prefix and `session:`, through the new `Crab\Redis\SessionStore`. List it after `SessionPlugin`. Redis drops a session when it expires, so there is nothing to sweep. Needs the framework release that adds sessions.
+
 ## 0.2.0 — 2026-11-12
 
 - Requires `crabphp/framework` ^0.7, for its 0.7.0 release.

@@ -9,6 +9,7 @@ use Crab\Contracts\Cache\Store as CacheStoreContract;
 use Crab\Contracts\Config\Config;
 use Crab\Contracts\Container\Container;
 use Crab\Contracts\Queue\Store as QueueStoreContract;
+use Crab\Contracts\Session\Driver as SessionDriverContract;
 use Crab\Contracts\WorkerPlugin;
 use Crab\Engine\Process\Worker;
 
@@ -23,11 +24,12 @@ use Crab\Engine\Process\Worker;
  *     tls      PHP's "ssl" context options for a "rediss://" address, such as "cafile"; none unless set
  *
  * With "cache.store" set to "redis" the cache's entries are kept there,
- * and with "queue.store" set to "redis" the queue's jobs are. Setting
+ * with "queue.store" set to "redis" the queue's jobs are, and with
+ * "session.driver" set to "redis" the sessions are. Setting
  * "broadcast.carrier" to "redis" carries updates between workers, using
  * broadcast.prefix for its channel names. List it in app.php after the
- * queue and broadcast plugins, whose store and carrier it takes the place
- * of:
+ * queue, broadcast and session plugins, whose store, carrier and driver
+ * it takes the place of:
  *
  *     ->withPlugins([RedisPlugin::class])
  */
@@ -58,6 +60,7 @@ final class RedisPlugin implements WorkerPlugin
             'cache' => ['store', CacheStoreContract::class],
             'queue' => ['store', QueueStoreContract::class],
             'broadcast' => ['carrier', Carrier::class],
+            'session' => ['driver', SessionDriverContract::class],
         ] as $section => [$key, $contract]) {
             if (!$container->has($contract)) {
                 continue;
@@ -89,6 +92,15 @@ final class RedisPlugin implements WorkerPlugin
                 static fn(Container $container): QueueStore => new QueueStore(
                     $container->get(Client::class),
                     $container->get(Config::class)->get('redis.prefix') . 'queue:',
+                ),
+            );
+        }
+        if ($config->get('session.driver') === 'redis') {
+            $container->singleton(
+                SessionDriverContract::class,
+                static fn(Container $container): SessionStore => new SessionStore(
+                    $container->get(Client::class),
+                    $container->get(Config::class)->get('redis.prefix') . 'session:',
                 ),
             );
         }

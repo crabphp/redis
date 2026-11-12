@@ -10,17 +10,19 @@ use Crab\Contracts\Cache\Store as CacheStoreContract;
 use Crab\Contracts\Container\Container;
 use Crab\Contracts\Plugin;
 use Crab\Contracts\Queue\Store as QueueStoreContract;
+use Crab\Contracts\Session\Driver as SessionDriver;
 use Crab\Redis\BroadcastCarrier;
 use Crab\Redis\CacheStore;
 use Crab\Redis\Client;
 use Crab\Redis\QueueStore;
+use Crab\Redis\SessionStore;
 use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 use PHPUnit\Framework\TestCase;
 
 final class ReadmeTest extends TestCase
 {
     #[RunInSeparateProcess]
-    public function testTheInstallationExampleRegistersAllThreeStoresBeforeTheApplicationsSetup(): void
+    public function testTheInstallationExampleRegistersEveryStoreBeforeTheApplicationsSetup(): void
     {
         class_alias(ReadmeSetup::class, 'App\\Setup');
         $directory = sys_get_temp_dir() . '/crab-redis-readme-' . bin2hex(random_bytes(8));
@@ -46,6 +48,7 @@ final class ReadmeTest extends TestCase
             self::assertInstanceOf(CacheStore::class, $app->container->get(CacheStoreContract::class));
             self::assertInstanceOf(QueueStore::class, $app->container->get(QueueStoreContract::class));
             self::assertInstanceOf(BroadcastCarrier::class, $app->container->get(Carrier::class));
+            self::assertInstanceOf(SessionStore::class, $app->container->get(SessionDriver::class));
             self::assertSame('shop:', $app->config->get('redis.prefix'));
             self::assertSame('shop:broadcast:', $app->config->get('broadcast.prefix'));
         } finally {
@@ -68,6 +71,7 @@ final class ReadmeSetup implements Plugin
             $container->has(Client::class)
             && $container->has(CacheStoreContract::class)
             && $container->has(QueueStoreContract::class)
-            && $container->has(Carrier::class);
+            && $container->has(Carrier::class)
+            && $container->has(SessionDriver::class);
     }
 }

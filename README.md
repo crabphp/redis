@@ -1,8 +1,8 @@
 # Crab Redis
 
-Redis for the [Crab framework](https://github.com/crabphp/framework): a cache store, a queue store and a broadcast carrier. A command waits for Redis without holding its worker, so other requests and jobs go on meanwhile. The client is Crab's own, on the framework's engine, with no other dependency.
+Redis for the [Crab framework](https://github.com/crabphp/framework): a cache store, a queue store, a session driver and a broadcast carrier. A command waits for Redis without holding its worker, so other requests and jobs go on meanwhile. The client is Crab's own, on the framework's engine, with no other dependency.
 
-Use it when several servers share a cache, when the cache is read too often for the database, or when the queue has more workers than a database table hands jobs to comfortably. A small application does not need it: the framework's file and database stores are enough.
+Use it when several servers share a cache or sessions, when the cache is read too often for the database, or when the queue has more workers than a database table hands jobs to comfortably. A small application does not need it: the framework's file and database stores are enough.
 
 ## Installation
 
@@ -12,7 +12,7 @@ Requires PHP 8.4 or later, Crab framework 0.7.x and Redis 6.2 or later.
 composer require crabphp/redis
 ```
 
-The cache plugin is a core one; the queue and broadcast plugins are optional. This example enables all three Redis stores. Leave out `QueuePlugin` or `BroadcastPlugin` and its configuration file when you do not use that service. Keep `RedisPlugin` after the plugins whose stores it replaces, and your application's setup last:
+The cache plugin is a core one; the queue, broadcast and session plugins are optional. This example enables every Redis store. Leave out `QueuePlugin`, `BroadcastPlugin` or `SessionPlugin` and its configuration file when you do not use that service. Keep `RedisPlugin` after the plugins whose stores it replaces, and your application's setup last:
 
 ```php
 // app.php
@@ -21,11 +21,13 @@ use Crab\App;
 use Crab\Broadcast\BroadcastPlugin;
 use Crab\Queue\QueuePlugin;
 use Crab\Redis\RedisPlugin;
+use Crab\Session\SessionPlugin;
 
 return App::configure(__DIR__)
     ->withPlugins([
         QueuePlugin::class,
         BroadcastPlugin::class,
+        SessionPlugin::class,
         RedisPlugin::class,
     ])
     ->withSetup(Setup::class)
@@ -49,7 +51,12 @@ return ['store' => 'redis'];
 return ['carrier' => 'redis', 'prefix' => 'shop:broadcast:'];
 ```
 
-Nothing else changes. `Cache`, `Queue`, `queue:work`, supervisors, retries and `queue:failed` work as they do on the other stores. There is no table to install.
+```php
+// config/session.php
+return ['driver' => 'redis'];
+```
+
+Nothing else changes. `Cache`, `Queue`, `queue:work`, supervisors, retries, `queue:failed` and sessions work as they do on the other stores. There is no table to install.
 
 `App\Setup` is your application's class implementing `Crab\Contracts\Plugin`; omit `withSetup()` if you have none. `php cua start` runs the queue workers beside HTTP when `QueuePlugin` is listed. There is no `server.with` setting.
 
@@ -72,7 +79,7 @@ return [
 | `redis.reply_timeout` | `5.0` | Positive seconds allowed to write a command, then to wait for its reply; an explicit blocking timeout is added to the reply wait |
 | `redis.tls` | none | PHP's `ssl` context options for a `rediss://` address, such as `['cafile' => '/etc/ssl/redis-ca.pem']` |
 
-The cache's keys start with the prefix and `cache:`, the queue's with the prefix and `queue:`. `cache:clear` removes the cache's values and nothing else on the server; its locks stay unless you add `--locks`.
+The cache's keys start with the prefix and `cache:`, the queue's with the prefix and `queue:`, and the sessions' with the prefix and `session:`. Redis drops a session when it expires, so sessions need no sweeping. `cache:clear` removes the cache's values and nothing else on the server; its locks stay unless you add `--locks`.
 
 The URL's database is a nonnegative decimal integer, such as `/2` or `?database=2`; an absent database selects `0`. Invalid database text is refused before connecting. A query password must be a string, and both timeouts must be positive and finite, including when constructing `EngineClient` yourself.
 
